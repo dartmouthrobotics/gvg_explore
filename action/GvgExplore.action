@@ -1,0 +1,10 @@
+#goal definition
+geometry_msgs/Pose[] edge
+---
+#result definition
+string result
+geometry_msgs/Pose[] explored_points
+---
+#feedback
+string progress
+geometry_msgs/Pose current_point
