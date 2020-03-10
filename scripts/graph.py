@@ -180,11 +180,18 @@ class Graph:
                 if self.in_line_with_previous_edge(self.prev_ridge, (e, obs)):
                     d = pu.D(robot_pose, e[1])  # min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
                     edge_dists[(e, obs)] = d
+        if edge_dists:
+            new_close_ridge = min(edge_dists, key=edge_dists.get)
+            if self.prev_ridge and self.prev_ridge[0] == new_close_ridge[0]:
+                rospy.logerr("Same edge as old one")
+                new_close_ridge = ((self.prev_ridge[0][1], self.prev_ridge[0][0]), self.prev_ridge[1])
+        else:
+            rospy.logerr("No new edge ahead")
+            new_close_ridge = ((self.prev_ridge[0][1], self.prev_ridge[0][0]), self.prev_ridge[1])
 
-        new_close_ridge = min(edge_dists, key=edge_dists.get)
-        self.prev_ridge = new_close_ridge
         new_closest_ridge = self.create_ridge(new_close_ridge)
         edgelist.close_ridge = new_closest_ridge
+        self.prev_ridge = new_close_ridge
         for k, v in self.pixel_desc.items():
             pix = Pixel()
             pix.pose.position.x = k[INDEX_FOR_X]
@@ -330,7 +337,8 @@ class Graph:
                     # if q1 in self.deleted_obstacles and q2 in self.deleted_obstacles:  # avoiding all deleted edges
                     #     rospy.logerr("Deleted edge: {}".format((p1, p2)))
                     #     continue
-                    if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,q2) > self.min_hallway_width:
+                    if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,
+                                                                                                    q2) > self.min_hallway_width:
                         e = (p1, p2)
                         self.edges[e] = o
             self.get_adjacency_list(self.edges)

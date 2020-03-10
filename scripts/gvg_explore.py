@@ -139,6 +139,7 @@ class GVGExplore:
         leaf = edge[1]
         self.move_to_frontier(leaf, visited_nodes)
         while not self.action_server.is_preempt_requested():
+            rospy.logerr('Recomputing frontier')
             rpose = self.get_robot_pose()
             scaled_pose = scale_up(rpose)
             p = Pose()
@@ -146,25 +147,30 @@ class GVGExplore:
             p.position.y = scaled_pose[INDEX_FOR_Y]
             edge_data = self.fetch_graph(FetchGraphRequest(pose=p))
             edge = self.process_edges(edge_data)
+            rospy.logerr('Returned edge')
             self.run_dfs(visited_nodes, edge)
 
     def move_to_frontier(self, pose, visited):
         scaled_pose = scale_down(pose)
         self.moving_to_frontier = True
+        rospy.logerr("Moving to goal")
         self.move_robot_to_goal(scaled_pose)
         while self.moving_to_frontier:
             continue
+        rospy.logerr('Moving arrived')
         self.create_feedback(self.get_robot_pose())
         visited[pose] = None
 
     def run_dfs(self, visited_nodes, edge):
-        if edge[1] in self.leaves:
+        rospy.logerr('Edges: {}'.format(edge))
+        if edge[1] in self.leaves and edge[1] not in visited_nodes:
             child_leaf = edge[1]
-        elif edge[0] in self.leaves:
+        elif edge[0] in self.leaves and edge[0] not in visited_nodes:
             child_leaf = edge[0]
         else:
             rospy.logerr("Processing edges")
             child_leaf = self.get_child_leaf(edge[1], edge[0], visited_nodes)
+            rospy.logerr("Processing done: {}".format(child_leaf))
         if child_leaf:
             if self.debug_mode:
                 if self.robot_id == 0:
@@ -275,7 +281,7 @@ class GVGExplore:
                 if v not in local_visited and v != u:
                     S.append(v)
                     parents[v] = u
-                    if v in self.leaves:
+                    if v in self.leaves and v not in all_visited:
                         leaves.append(v)
             local_visited.append(u)
 
@@ -340,6 +346,7 @@ class GVGExplore:
     def move_robot_to_goal(self, goal, direction=1):
         self.current_point = goal
         id_val = "robot_{}_{}_explore".format(self.robot_id, self.goal_count)
+        self.goal_count += 1
         move = MoveToPosition2DActionGoal()
         frame_id = '/robot_{}/map'.format(self.robot_id)
         move.header.frame_id = frame_id
@@ -352,7 +359,6 @@ class GVGExplore:
         self.moveTo_pub.publish(move)
         self.prev_pose = self.get_robot_pose()
         self.start_time = rospy.Time.now().secs
-        self.goal_count += 1
 
     def navigation_plan_callback(self, data):
         if self.waiting_for_plan:
@@ -362,46 +368,41 @@ class GVGExplore:
         id_0 = "robot_{}_{}_explore".format(self.robot_id, self.goal_count - 1)
         if data.status_list:
             goal_status = data.status_list[0]
-            if goal_status.goal_id.id:
-                if goal_status.goal_id.id == id_0:
-                    if goal_status.status == ACTIVE:
-                        now = rospy.Time.now().secs
-                        if (now - self.start_time) > 5:
-                            pose = self.get_robot_pose()
-                            if D(self.prev_pose, pose) < 0.5:
-                                self.has_arrived = True
-                            self.prev_pose = pose
-                            self.start_time = now
-                    else:
-                        if not self.has_arrived:
-                            self.has_arrived = True
+            # if goal_status.goal_id.id:
+            #     if goal_status.goal_id.id == id_0:
+            #         if goal_status.status == ACTIVE:
+            #             now = rospy.Time.now().secs
+            #             if (now - self.start_time) > 5:
+            #                 pose = self.get_robot_pose()
+            #                 if D(self.prev_pose, pose) < 0.5:
+            #                     self.has_arrived = True
+            #                 self.prev_pose = pose
+            #                 self.start_time = now
+            #         else:
+            #             if not self.has_arrived:
+            #                 self.has_arrived = True
 
     def move_result_callback(self, data):
         id_0 = "robot_{}_{}_explore".format(self.robot_id, self.goal_count - 1)
         if data.status:
             if data.status.status == ABORTED:
-                # if data.status.goal_id.id == id_0:
-                if self.move_attempt < MAX_ATTEMPTS:
-                    self.rotate_robot()
-                    self.move_robot_to_goal(self.current_point, TO_FRONTIER)
-                    self.move_attempt += 1
-                else:
-                    # rospy.logerr("Robot {} can't reach goal: {}".format(self.robot_id, self.current_point))
-                    self.navigation_failed = True
-                    self.move_to_stop()
+                rospy.logerr("Robot {} cant reach goal..".format(self.robot_id))
+                if data.status.goal_id.id == id_0:
+                    rospy.logerr("Robot {} received goal id..".format(self.robot_id))
+                    self.has_arrived = True
                     if self.moving_to_frontier:
                         self.moving_to_frontier = False
             elif data.status.status == SUCCEEDED:
+                rospy.logerr("Robot {} arrived at goal..".format(self.robot_id))
                 if data.status.goal_id.id == id_0:
-                    # rospy.logerr("Robot {} arrived at goal..".format(self.robot_id))
+                    rospy.logerr("Robot {} received correct goal id..".format(self.robot_id))
                     # self.rotate_robot()
                     self.has_arrived = True
                     if self.moving_to_frontier:
                         self.moving_to_frontier = False
                     if not self.prev_explored:
                         self.prev_explored = self.current_point
-                    self.traveled_distance.append({'time': rospy.Time.now().to_sec(),
-                                                   'traved_distance': D(self.prev_explored, self.current_point)})
+                    self.traveled_distance.append({'time': rospy.Time.now().to_sec(),'traved_distance': D(self.prev_explored, self.current_point)})
                     self.prev_explored = self.current_point
 
     # def chosen_point_callback(self, data):
