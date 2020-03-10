@@ -11,7 +11,7 @@
     <arg name="map_height" default=''/>
     <arg name="run" default="0"/>
     <group ns="$(arg robot_name)">
-        <node pkg="gvg_explore" type="robot.py" name="node$(arg robot_name)" >
+        <node pkg="gvgexplore" type="robot.py" name="node$(arg robot_name)" >
             <param name="robot_id" value="$(arg robot_name)"/>
             <param name="robot_type" value="$(arg robot_type)"/>
             <param name="base_stations" value="$(arg base_stations)"/>
@@ -22,10 +22,10 @@
             <param name="map_width" value="$(arg map_width)"/>
             <param name="map_height" value="$(arg map_height)"/>
             <param name="run" value="$(arg run)"/>
-            <rosparam file="$(find gvg_explore)/param/gvg_config.yaml"/>
+            <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
         </node>
 
-        <node pkg="gvg_explore" type="graph.py" name="node$(arg robot_name)_graph_processor" >
+        <node pkg="gvgexplore" type="graph.py" name="node$(arg robot_name)_graph_processor" >
             <param name="robot_id" value="$(arg robot_name)"/>
             <param name="robot_type" value="$(arg robot_type)"/>
             <param name="base_stations" value="$(arg base_stations)"/>
@@ -36,10 +36,10 @@
             <param name="map_width" value="$(arg map_width)"/>
             <param name="map_height" value="$(arg map_height)"/>
             <param name="run" value="$(arg run)"/>
-            <rosparam file="$(find gvg_explore)/param/gvg_config.yaml"/>
+            <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
         </node>
 
-        <node pkg="gvg_explore" type="gvg_explore.py" name="node$(arg robot_name)_explore" >
+        <node pkg="gvgexplore" type="gvg_explore.py" name="node$(arg robot_name)_explore" >
             <param name="robot_id" value="$(arg robot_name)"/>
             <param name="robot_type" value="$(arg robot_type)"/>
             <param name="base_stations" value="$(arg base_stations)"/>
@@ -50,7 +50,7 @@
             <param name="map_width" value="$(arg map_width)"/>
             <param name="map_height" value="$(arg map_height)"/>
             <param name="run" value="$(arg run)"/>
-            <rosparam file="$(find gvg_explore)/param/gvg_config.yaml"/>
+            <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
         </node>
     </group>
 </launch>

@@ -10,8 +10,8 @@ from nav_msgs.msg import *
 from sensor_msgs.msg import *
 from geometry_msgs.msg import *
 import math
-from gvgexploration.msg import *
-from gvgexploration.srv import *
+from gvgexplore.msg import *
+from gvgexplore.srv import *
 import numpy as np
 from time import sleep
 import tf
@@ -36,13 +36,13 @@ class Robot:
                                                         FrontierPoint)
         self.check_intersections = rospy.ServiceProxy('/robot_{}/check_intersections'.format(self.robot_id),
                                                       Intersections)
-        rospy.Subscriber('/robot_{}/gvg_explore/feedback'.format(self.robot_id), GvgExploreActionFeedback,
+        rospy.Subscriber('/robot_{}/gvgexplore/feedback'.format(self.robot_id), GvgExploreActionFeedback,
                          self.explore_feedback_callback)
         rospy.Subscriber('/robot_{}/map'.format(self.robot_id), OccupancyGrid, self.map_update_callback)
 
         # ======= pose transformations====================
         self.listener = tf.TransformListener()
-        self.exploration = SimpleActionClient("/robot_{}/gvg_explore".format(self.robot_id), GvgExploreAction)
+        self.exploration = SimpleActionClient("/robot_{}/gvgexplore".format(self.robot_id), GvgExploreAction)
         self.exploration.wait_for_server()
         rospy.loginfo("Robot {} Initialized successfully!!".format(self.robot_id))
 
@@ -74,28 +74,25 @@ class Robot:
         robot_pose = self.get_robot_pose()
         self.frontier_point = None
         dist_dict = {}
-        for point in frontier_points:
-            dist_dict[pu.D(robot_pose, point)] = point
-        frontier_point = dist_dict[min(list(dist_dict))]
-        pose = Pose()
-        pose.position.x = frontier_point[pu.INDEX_FOR_X]
-        pose.position.y = frontier_point[pu.INDEX_FOR_Y]
-        self.start_exploration_action(pose)
+        for point, ridge in frontier_points.items():
+            dist_dict[pu.D(robot_pose, point)] = ridge
+        frontier_ridge = dist_dict[min(list(dist_dict))]
+        self.start_exploration_action(frontier_ridge)
 
-    def start_exploration_action(self, pose):
-        goal = GvgExploreGoal(pose=pose)
+    def start_exploration_action(self, frontier_ridge):
+        goal = GvgExploreGoal(ridge=frontier_ridge)
         self.exploration.wait_for_server()
         self.goal_handle = self.exploration.send_goal(goal)
         self.exploration.wait_for_result()
         self.exploration.get_result()
 
     def parse_frontier_response(self, data):
-        frontier_points = []
-        received_poses = data.poses
-        if received_poses:
-            for p in received_poses:
-                yaw = self.get_elevation((p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w))
-                frontier_points.append((p.position.x, p.position.y, yaw))
+        frontier_points = {}
+        received_ridges = data.ridges
+        for r in received_ridges:
+            p = r.nodes[1]
+            yaw = self.get_elevation((p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w))
+            frontier_points[(p.position.x, p.position.y, yaw)] = r
         return frontier_points
 
     def get_robot_pose(self):

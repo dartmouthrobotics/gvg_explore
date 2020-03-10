@@ -1,4 +1,4 @@
-gvg_explore/MessageHeader msg_header
-gvg_explore/Pose[] poses
+gvgexplore/MessageHeader msg_header
+gvgexplore/Ridge[] ridges
 float64[] distances
-std_msgs/String session_id
+string session_id

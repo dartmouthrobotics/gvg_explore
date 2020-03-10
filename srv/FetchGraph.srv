@@ -1,3 +1,3 @@
 geometry_msgs/Pose pose
 ---
-gvg_explore/EdgeList edgelist
+gvgexplore/EdgeList edgelist

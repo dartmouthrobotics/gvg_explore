@@ -1,3 +1,3 @@
-gvg_explore/MessageHeader msg_header
-gvg_explore/Ridge ridge
-std_msgs/String session_id
+gvgexplore/MessageHeader msg_header
+gvgexplore/Ridge ridge
+string session_id

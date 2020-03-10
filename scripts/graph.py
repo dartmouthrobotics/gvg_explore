@@ -12,8 +12,8 @@ import rospy
 from threading import Lock
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Pose
-from gvgexploration.msg import *
-from gvgexploration.srv import *
+from gvgexplore.msg import *
+from gvgexplore.srv import *
 import project_utils as pu
 import tf
 from time import sleep
@@ -59,6 +59,7 @@ class Graph:
         self.performance_data = []
         self.last_intersection = None
         self.latest_map = None
+        self.prev_ridge = None
         rospy.init_node("graph_node")
         self.robot_id = rospy.get_param("~robot_id")
         self.robot_count = rospy.get_param("~robot_count")
@@ -85,6 +86,9 @@ class Graph:
         self.already_shutdown = False
         self.robot_pose = None
         self.listener = tf.TransformListener()
+
+        # edges
+        self.deleted_nodes = {}
 
     def spin(self):
         r = rospy.Rate(0.1)
@@ -117,17 +121,14 @@ class Graph:
         start_time = time.time()
         self.compute_new_information()
         ppoints = []
-        selected_poses = []
+        selected_leaves = []
         while len(self.new_information) > 0:
-            best_point = max(self.new_information, key=self.new_information.get)
-            new_p = pu.scale_down(best_point)
-            pose = Pose()
-            pose.position.x = new_p[INDEX_FOR_X]
-            pose.position.y = new_p[INDEX_FOR_Y]
-            selected_poses.append(pose)
-            ppoints.append(best_point)
-            del self.new_information[best_point]
-            if len(selected_poses) == count:
+            best_edge = max(self.new_information, key=self.new_information.get)
+            ridge = self.create_ridge(best_edge)
+            selected_leaves.append(ridge)
+            ppoints.append(best_edge[0][1])
+            del self.new_information[best_edge]
+            if len(selected_leaves) == count:
                 break
         now = time.time()
         t = (now - start_time)
@@ -136,7 +137,7 @@ class Graph:
         if self.debug_mode:
             if not self.plot_data_active:
                 self.plot_data(ppoints, is_initial=True)
-        return FrontierPointResponse(poses=selected_poses)
+        return FrontierPointResponse(ridges=selected_leaves)
 
     def intersection_handler(self, data):
         pose_data = data.pose
@@ -158,6 +159,7 @@ class Graph:
         return IntersectionsResponse(result=result)
 
     def fetch_graph_handler(self, data):
+        robot_pose = (data.pose.position.x, data.pose.position.y)
         map_msg = self.latest_map
         if not map_msg:
             map_msg = rospy.wait_for_message("/robot_{}/map".format(self.robot_id), OccupancyGrid)
@@ -166,23 +168,29 @@ class Graph:
         edgelist = EdgeList()
         edgelist.header.stamp = rospy.Time.now()
         edgelist.header.frame_id = str(self.robot_id)
-        edgelist.edges = []
+        edgelist.ridges = []
         edgelist.pixels = []
-        for r in alledges:
-            ridge = Ridge()
-            if r in self.edges:
-                obs = self.edges[r]
-                ridge.px = []
-                ridge.py = []
-                ridge.px = [r[0][INDEX_FOR_X], r[1][INDEX_FOR_X], obs[0][INDEX_FOR_X], obs[1][INDEX_FOR_X]]
-                ridge.py = [r[0][INDEX_FOR_Y], r[1][INDEX_FOR_Y], obs[0][INDEX_FOR_Y], obs[1][INDEX_FOR_Y]]
-                edgelist.edges.append(ridge)
+        edge_dists = {}
+        for e in alledges:
+            if e in self.edges:
+                obs = self.edges[e]
+                ridge = self.create_ridge((e, obs))
+                edgelist.ridges.append(ridge)
+                if self.in_line_with_previous_edge(self.prev_ridge, (e, obs)):
+                    d = pu.D(robot_pose, e[1])  # min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
+                    edge_dists[(e, obs)] = d
+
+        new_close_ridge = min(edge_dists, key=edge_dists.get)
+        self.prev_ridge = new_close_ridge
+        new_closest_ridge = self.create_ridge(new_close_ridge)
+        edgelist.close_ridge = new_closest_ridge
         for k, v in self.pixel_desc.items():
             pix = Pixel()
-            pix.x = k[INDEX_FOR_X]
-            pix.y = k[INDEX_FOR_Y]
+            pix.pose.position.x = k[INDEX_FOR_X]
+            pix.pose.position.y = k[INDEX_FOR_Y]
             pix.desc = v
             edgelist.pixels.append(pix)
+
         return FetchGraphResponse(edgelist=edgelist)
 
     def compute_graph(self, occ_grid):
@@ -302,7 +310,7 @@ class Graph:
             vertices = vor.vertices
             ridge_vertices = vor.ridge_vertices
             ridge_points = vor.ridge_points
-            self.edges.clear()
+            self.edges.clear()  # remove this if you're implementing incremental
             for i in range(len(ridge_vertices)):
                 ridge_vertex = ridge_vertices[i]
                 ridge_point = ridge_points[i]
@@ -318,6 +326,9 @@ class Graph:
                     o = (q1, q2)
                     p1 = pu.get_point(p1)
                     p2 = pu.get_point(p2)
+                    # if p1 in self.deleted_nodes and p2 in self.deleted_nodes:  # avoiding all deleted edges
+                    #     rospy.logerr("Deleted edge: {}".format((p1, p2)))
+                    #     continue
                     if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,
                                                                                                     q2) > self.min_hallway_width:
                         e = (p1, p2)
@@ -325,7 +336,10 @@ class Graph:
             self.get_adjacency_list(self.edges)
             self.connect_subtrees()
             self.merge_similar_edges()
+            # add edges to processed edges
+
         self.lock.release()
+
 
     def merge_records(self):
         old_nodes = list(self.adj_list)
@@ -433,6 +447,71 @@ class Graph:
         for k, v in self.adj_list.items():
             if len(v) == 1:
                 self.leaf_slope[k] = pu.theta(list(v)[0], k)
+
+    def get_edge(self, ridge):
+        edge = {}
+        try:
+            p1 = [0.0] * 2
+            p1[INDEX_FOR_X] = ridge.nodes[0][INDEX_FOR_X]
+            p1[INDEX_FOR_Y] = ridge.nodes[0][INDEX_FOR_Y]
+            p1 = tuple(p1)
+            p2 = [0.0] * 2
+            p2[INDEX_FOR_X] = ridge.nodes[1][INDEX_FOR_X]
+            p2[INDEX_FOR_Y] = ridge.nodes[1][INDEX_FOR_Y]
+            p2 = tuple(p2)
+            q1 = [0.0] * 2
+            q1[INDEX_FOR_X] = ridge.obstacles[0][INDEX_FOR_X]
+            q1[INDEX_FOR_Y] = ridge.obstacles[0][INDEX_FOR_Y]
+            q1 = tuple(q1)
+            q2 = [0.0] * 2
+            q2[INDEX_FOR_X] = ridge.obstacles[1][INDEX_FOR_X]
+            q2[INDEX_FOR_Y] = ridge.obstacles[1][INDEX_FOR_Y]
+            q2 = tuple(q2)
+            P = (p1, p2)
+            Q = (q1, q2)
+            edge[P] = Q
+        except:
+            rospy.logerr("Invalid goal")
+
+        return edge
+
+    def create_ridge(self, ridge):
+        p1 = Pose()
+        p1.position.x = ridge[0][0][INDEX_FOR_X]
+        p1.position.y = ridge[0][0][INDEX_FOR_Y]
+
+        p2 = Pose()
+        p2.position.x = ridge[0][1][INDEX_FOR_X]
+        p2.position.y = ridge[0][1][INDEX_FOR_Y]
+
+        q1 = Pose()
+        q1.position.x = ridge[1][0][INDEX_FOR_X]
+        q1.position.y = ridge[1][0][INDEX_FOR_Y]
+
+        q2 = Pose()
+        q2.position.x = ridge[1][1][INDEX_FOR_X]
+        q2.position.y = ridge[1][1][INDEX_FOR_Y]
+
+        ridge = Ridge()
+        ridge.nodes = [p1, p2]
+        ridge.obstacles = [q1, q2]
+        ridge.scale = pu.SCALE
+
+        return ridge
+
+    def in_line_with_previous_edge(self, prev_ridge, current_edge):
+        in_line = False
+        if not prev_ridge:
+            in_line = True
+        else:
+            edge1 = prev_ridge[0]
+            edge2 = current_edge[1]
+            v1 = pu.get_vector(edge1[0], edge1[1])
+            v2 = pu.get_vector(edge2[0], edge2[1])
+            cos_theta, separation = pu.compute_similarity(v1, v2, edge1, edge2)
+            if cos_theta >= 0:
+                in_line = True
+        return in_line
 
     def scatter_plot(self):
         plt.figure(figsize=(12, 9))
@@ -555,6 +634,7 @@ class Graph:
                 self.leaf_slope[k] = pu.theta(k, list(v)[0])
         self.adj_list = new_adj_list
         self.edges = edges
+        self.deleted_nodes.update(deleted_nodes)  # add all the new deleted nodes
 
     def add_edge(self, edge, new_edges):
         obst = ((0, 0), (0, 0))
@@ -592,17 +672,19 @@ class Graph:
         adjlist_copy = copy.deepcopy(self.adj_list)
         for leaf, slope in leaf_copy.items():
             obs = None
-            if (list(adjlist_copy[leaf])[0], leaf) in edges_copy:
-                obs = edges_copy[(list(adjlist_copy[leaf])[0], leaf)]
-            elif (leaf, list(adjlist_copy[leaf])[0]) in edges_copy:
-                obs = edges_copy[(leaf, list(adjlist_copy[leaf])[0])]
+            edge = (list(adjlist_copy[leaf])[0], leaf)
+            redge = (leaf, list(adjlist_copy[leaf])[0])
+            if edge in edges_copy:
+                obs = edges_copy[edge]
+            elif redge in edges_copy:
+                obs = edges_copy[redge]
             if obs:
                 frontier_size[leaf] = pu.D(obs[0], obs[1])
                 ks, us = self.area(leaf, slope)
                 unknown_area = len(us) * resolution ** 2
-                self.new_information[leaf] = unknown_area
-                self.known_points[leaf] = ks
-                self.unknown_points[leaf] = us
+                self.new_information[(edge, obs)] = unknown_area
+                self.known_points[(edge, obs)] = ks
+                self.unknown_points[(edge, obs)] = us
 
     def area(self, point, orientation):
         known_points = []
