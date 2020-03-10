@@ -89,6 +89,7 @@ class Graph:
 
         # edges
         self.deleted_nodes = {}
+        self.deleted_obstacles = {}
 
     def spin(self):
         r = rospy.Rate(0.1)
@@ -310,7 +311,7 @@ class Graph:
             vertices = vor.vertices
             ridge_vertices = vor.ridge_vertices
             ridge_points = vor.ridge_points
-            self.edges.clear()  # remove this if you're implementing incremental
+            self.edges.clear()
             for i in range(len(ridge_vertices)):
                 ridge_vertex = ridge_vertices[i]
                 ridge_point = ridge_points[i]
@@ -326,11 +327,10 @@ class Graph:
                     o = (q1, q2)
                     p1 = pu.get_point(p1)
                     p2 = pu.get_point(p2)
-                    # if p1 in self.deleted_nodes and p2 in self.deleted_nodes:  # avoiding all deleted edges
+                    # if q1 in self.deleted_obstacles and q2 in self.deleted_obstacles:  # avoiding all deleted edges
                     #     rospy.logerr("Deleted edge: {}".format((p1, p2)))
                     #     continue
-                    if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,
-                                                                                                    q2) > self.min_hallway_width:
+                    if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,q2) > self.min_hallway_width:
                         e = (p1, p2)
                         self.edges[e] = o
             self.get_adjacency_list(self.edges)
@@ -339,7 +339,6 @@ class Graph:
             # add edges to processed edges
 
         self.lock.release()
-
 
     def merge_records(self):
         old_nodes = list(self.adj_list)
@@ -605,6 +604,9 @@ class Graph:
                                 else:
                                     self.edges[(parents[u], v)] = self.edges[(parents[u], u)]
                                 del self.adj_list[u]
+                                # obs = self.edges[(parents[u], v)]
+                                # self.deleted_obstacles[obs[0]] = None
+                                # self.deleted_obstacles[obs[1]] = None
                             else:
                                 parents[v] = u
                         else:
@@ -634,7 +636,7 @@ class Graph:
                 self.leaf_slope[k] = pu.theta(k, list(v)[0])
         self.adj_list = new_adj_list
         self.edges = edges
-        self.deleted_nodes.update(deleted_nodes)  # add all the new deleted nodes
+        # self.deleted_nodes.update(deleted_nodes)  # add all the new deleted nodes
 
     def add_edge(self, edge, new_edges):
         obst = ((0, 0), (0, 0))

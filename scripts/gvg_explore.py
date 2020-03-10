@@ -163,6 +163,7 @@ class GVGExplore:
         elif edge[0] in self.leaves:
             child_leaf = edge[0]
         else:
+            rospy.logerr("Processing edges")
             child_leaf = self.get_child_leaf(edge[1], edge[0], visited_nodes)
         if child_leaf:
             if self.debug_mode:
