@@ -57,13 +57,14 @@ class Robot:
         self.request_and_share_frontiers()
 
     def check_data_sharing_status(self):
-        robot_pose = self.get_robot_pose()
-        p = Pose()
-        p.position.x = robot_pose[pu.INDEX_FOR_X]
-        p.position.y = robot_pose[pu.INDEX_FOR_Y]
-        response = self.check_intersections(IntersectionsRequest(pose=p))
-        if response.result:
-            rospy.logerr("Robot {}: Sending data to available devices...".format(self.robot_id))
+        pass
+        # robot_pose = self.get_robot_pose()
+        # p = Pose()
+        # p.position.x = robot_pose[pu.INDEX_FOR_X]
+        # p.position.y = robot_pose[pu.INDEX_FOR_Y]
+        # response = self.check_intersections(IntersectionsRequest(pose=p))
+        # if response.result:
+        #     rospy.logerr("Robot {}: Sending data to available devices...".format(self.robot_id))
 
     def explore_feedback_callback(self, data):
         self.is_exploring = True

@@ -146,6 +146,7 @@ class GVGExplore:
             p.position.y = scaled_pose[INDEX_FOR_Y]
             edge_data = self.fetch_graph(FetchGraphRequest(pose=p))
             edge = self.process_edges(edge_data)
+            rospy.logerr("New edge received..")
             self.run_dfs(visited_nodes, edge)
 
     def move_to_frontier(self, pose, visited):
@@ -158,12 +159,19 @@ class GVGExplore:
         visited[pose] = None
 
     def run_dfs(self, visited_nodes, edge):
+        rospy.logerr("DFS called..")
         if edge[1] in self.leaves:
+            rospy.logerr("Processing 0")
             child_leaf = edge[1]
         elif edge[0] in self.leaves:
+            rospy.logerr("Processing 0.5")
             child_leaf = edge[0]
         else:
+            rospy.logerr("Processing 1")
             child_leaf = self.get_child_leaf(edge[1], edge[0], visited_nodes)
+        if not child_leaf:
+            rospy.logerr("Processing 2")
+            child_leaf = self.get_child_leaf(edge[0], edge[1], visited_nodes)
         if child_leaf:
             if self.debug_mode:
                 if self.robot_id == 0:
@@ -171,7 +179,9 @@ class GVGExplore:
                     point = scale_up(pose)
                     self.plot_intersections(point, child_leaf, edge)
             self.move_to_frontier(child_leaf, visited_nodes)
-        rospy.logerr("Arrived")
+            rospy.logerr("Arrived")
+        else:
+            rospy.logerr("No leaf left")
 
     def get_edge(self, ridge):
         edge = {}
@@ -274,14 +284,14 @@ class GVGExplore:
                 if v not in local_visited and v != u:
                     S.append(v)
                     parents[v] = u
-                    if v in self.leaves:
+                    if v in self.leaves and v not in all_visited:
                         leaves.append(v)
             local_visited.append(u)
 
         dists = {}
         # rospy.logerr('Leaves: {}, Parents: {}'.format(leaves, parents))
         for l in leaves:
-            # rospy.logerr('Leaf: {}'.format(l))
+            rospy.logerr('Leaf: {}'.format(l))
             d = self.get_path(l, parents)
             dists[d] = l
         if dists:
@@ -352,6 +362,7 @@ class GVGExplore:
         self.prev_pose = self.get_robot_pose()
         self.start_time = rospy.Time.now().secs
         self.goal_count += 1
+        rospy.logerr('Going to goal: {}'.format(self.goal_count))
 
     def navigation_plan_callback(self, data):
         if self.waiting_for_plan:
@@ -379,26 +390,16 @@ class GVGExplore:
         id_0 = "robot_{}_{}_explore".format(self.robot_id, self.goal_count - 1)
         if data.status:
             if data.status.status == ABORTED:
-                # if data.status.goal_id.id == id_0:
-                if self.move_attempt < MAX_ATTEMPTS:
-                    self.rotate_robot()
-                    self.move_robot_to_goal(self.current_point, TO_FRONTIER)
-                    self.move_attempt += 1
-                else:
-                    # rospy.logerr("Robot {} can't reach goal: {}".format(self.robot_id, self.current_point))
-                    self.navigation_failed = True
-                    self.move_to_stop()
+                if data.status.goal_id.id == id_0:
                     if self.moving_to_frontier:
                         self.moving_to_frontier = False
+                        self.has_arrived =True
             elif data.status.status == SUCCEEDED:
                 if data.status.goal_id.id == id_0:
-                    # rospy.logerr("Robot {} arrived at goal..".format(self.robot_id))
-                    # self.rotate_robot()
                     self.has_arrived = True
                     if self.moving_to_frontier:
                         self.moving_to_frontier = False
-                    if not self.prev_explored:
-                        self.prev_explored = self.current_point
+                    self.prev_explored = self.current_point
                     self.traveled_distance.append({'time': rospy.Time.now().to_sec(),
                                                    'traved_distance': D(self.prev_explored, self.current_point)})
                     self.prev_explored = self.current_point

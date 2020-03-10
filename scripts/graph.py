@@ -159,6 +159,7 @@ class Graph:
         return IntersectionsResponse(result=result)
 
     def fetch_graph_handler(self, data):
+        rospy.logerr("Request received...")
         robot_pose = (data.pose.position.x, data.pose.position.y)
         map_msg = self.latest_map
         if not map_msg:
@@ -176,22 +177,37 @@ class Graph:
                 obs = self.edges[e]
                 ridge = self.create_ridge((e, obs))
                 edgelist.ridges.append(ridge)
-                if self.in_line_with_previous_edge(self.prev_ridge, (e, obs)):
-                    d = pu.D(robot_pose, e[1])  # min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
-                    edge_dists[(e, obs)] = d
+                d = min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
+                # if d not in edge_dists:
+                edge_dists[d] = (e, obs)
+                # else:
+                #     edge_dists[d].append((e, obs))
 
-        new_close_ridge = min(edge_dists, key=edge_dists.get)
-        self.prev_ridge = new_close_ridge
-        new_closest_ridge = self.create_ridge(new_close_ridge)
-        edgelist.close_ridge = new_closest_ridge
+        new_close_ridge = edge_dists[min(edge_dists.keys())]
+        # new_close_ridge = self.get_closest_edge(robot_pose, close_ridges)
+        if new_close_ridge:
+            self.prev_ridge = new_close_ridge
+            new_closest_ridge = self.create_ridge(new_close_ridge)
+            edgelist.close_ridge = new_closest_ridge
         for k, v in self.pixel_desc.items():
             pix = Pixel()
             pix.pose.position.x = k[INDEX_FOR_X]
             pix.pose.position.y = k[INDEX_FOR_Y]
             pix.desc = v
             edgelist.pixels.append(pix)
-
+        rospy.logerr("Processing complete...")
         return FetchGraphResponse(edgelist=edgelist)
+
+    def get_closest_edge(self, robot_pose, close_edges):
+        linear_edge = {}
+        chosen_edge = None
+        for e in close_edges:
+            if self.in_line_with_previous_edge(self.prev_ridge, e):
+                d = pu.D(robot_pose, e[0][1])
+                linear_edge[d] = e
+        if linear_edge:
+            chosen_edge = linear_edge[min(linear_edge.keys())]
+        return chosen_edge
 
     def compute_graph(self, occ_grid):
         start_time = time.time()
@@ -339,7 +355,6 @@ class Graph:
             # add edges to processed edges
 
         self.lock.release()
-
 
     def merge_records(self):
         old_nodes = list(self.adj_list)
