@@ -67,6 +67,7 @@ def pixel2pose(point, origin_x, origin_y, resolution):
     return tuple(new_p)
 
 
+
 def get_vector(p1, p2):
     xv = p2[INDEX_FOR_X] - p1[INDEX_FOR_X]
     yv = p2[INDEX_FOR_Y] - p1[INDEX_FOR_Y]

@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   nav2d_msgs
   sensor_msgs
+  visualization_msgs
   actionlib_msgs
   message_generation
 )
@@ -89,6 +90,7 @@ generate_messages(
    std_msgs
    nav2d_msgs
    sensor_msgs
+   visualization_msgs
    actionlib_msgs
  )
 

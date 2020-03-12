@@ -6,6 +6,9 @@ Panels:
       Expanded:
         - /Global Options1
         - /R1:Map1
+        - /NP:Marker1
+        - /EDGE:Marker1
+        - /Leaves:Marker1
       Splitter Ratio: 0.5
     Tree Height: 720
   - Class: rviz/Selection
@@ -71,6 +74,8 @@ Visualization Manager:
           Value: true
         robot_0/odom:
           Value: true
+        robot_0/offset:
+          Value: true
         robot_1/base_footprint:
           Value: true
         robot_1/base_laser_link:
@@ -87,8 +92,37 @@ Visualization Manager:
       Tree:
         map:
           robot_0/map:
-            {}
+            robot_0/offset:
+              robot_0/odom:
+                robot_0/base_footprint:
+                  robot_0/base_link:
+                    robot_0/base_laser_link:
+                      {}
       Update Interval: 0
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /robot_0/navigator/markers
+      Name: NP:Marker
+      Namespaces:
+        "": true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /robot_0/explore/edges
+      Name: EDGE:Marker
+      Namespaces:
+        "": true
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /robot_0/explore/vertices
+      Name: Leaves:Marker
+      Namespaces:
+        "": true
+      Queue Size: 100
       Value: true
   Enabled: true
   Global Options:
