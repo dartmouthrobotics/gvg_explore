@@ -1,0 +1,5 @@
+gvgexplore/BufferedData req_data
+---
+int32 in_session
+gvgexplore/BufferedData res_data
+geometry_msgs/Pose[] poses

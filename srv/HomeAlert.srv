@@ -1,0 +1,5 @@
+int32 robot_id
+int32 home_alert
+gvgexplore/BufferedData req_data
+---
+gvgexplore/BufferedData res_data

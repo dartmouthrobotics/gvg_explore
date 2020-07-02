@@ -12,10 +12,11 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   nav2d_msgs
+  nav_msgs
   sensor_msgs
-  visualization_msgs
   actionlib_msgs
   message_generation
+  visualization_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -60,12 +61,14 @@ add_message_files(
    RobotSignal.msg
    SignalStrength.msg
    RobotRange.msg
+   RendezvousLocations.msg
    Frontier.msg
    EdgeList.msg
    Pixel.msg
    Coverage.msg
    Ridge.msg
    MessageHeader.msg
+   DataSize.msg
  )
 
 ## Generate services in the 'action' folder
@@ -74,13 +77,22 @@ add_service_files(
   FrontierPoint.srv
   Intersections.srv
   FetchGraph.srv
+  HotSpot.srv
+  SharedData.srv
+  SharedPoint.srv
+  HotSpot.srv
+  HomeAlert.srv
+  ExploredRegion.srv
+  SharedFrontier.srv
+  RendezvousPoints.srv
+  CancelExploration.srv
 #  Service2.srv
 )
 
 # ## Generate actions in the 'action' folder
 add_action_files(
   FILES
-  GvgExplore.action
+#   GvgExplore.action
 #   Action2.action
 )
 
@@ -89,9 +101,10 @@ generate_messages(
    DEPENDENCIES
    std_msgs
    nav2d_msgs
+   nav_msgs
    sensor_msgs
-   visualization_msgs
    actionlib_msgs
+   visualization_msgs
  )
 
 ################################################

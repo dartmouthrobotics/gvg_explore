@@ -16,13 +16,19 @@ from gvgexplore.msg import *
 from gvgexplore.srv import *
 import project_utils as pu
 import tf
+from graham_scan import graham_scan
 from time import sleep
+import shapely.geometry as sg
 from nav_msgs.msg import *
 from nav2d_navigator.msg import *
 from std_srvs.srv import *
 from project_utils import INDEX_FOR_X, INDEX_FOR_Y, save_data
 from std_msgs.msg import String
+from numpy.linalg import norm
+import shapely.geometry as sg
+from shapely.geometry.polygon import Polygon
 
+INF = 100000
 SCALE = 10
 FREE = 0.0
 OCCUPIED = 100.0
@@ -38,12 +44,14 @@ class Graph:
         self.height = 0
         self.width = 0
         self.pixel_desc = {}
+        self.all_poses = set()
         self.obstacles = {}
         self.free_points = {}
-        self.resolution = 0.05
+        self.map_resolution = 0.05
         self.plot_intersection_active = False
         self.plot_data_active = False
         self.lock = Lock()
+
         self.obstacles = {}
         self.adj_list = {}
         self.edges = {}
@@ -56,8 +64,13 @@ class Graph:
         self.new_information = {}
         self.known_points = {}
         self.unknown_points = {}
+        self.global_leaves = {}
+        self.leaf_edges = {}
+        self.leaf_obstacles = {}
         self.performance_data = []
+        self.explored_points = set()
         self.last_intersection = None
+
         self.latest_map = None
         self.prev_ridge = None
         rospy.init_node("graph_node")
@@ -66,35 +79,44 @@ class Graph:
         self.environment = rospy.get_param("~environment")
         self.run = rospy.get_param("~run")
         self.debug_mode = rospy.get_param("~debug_mode")
+        self.method = rospy.get_param("~method")
+        self.bs_pose = rospy.get_param('~bs_pose')
+        self.map_scale = rospy.get_param('~map_scale')
+        self.graph_scale = rospy.get_param("~graph_scale")
         self.termination_metric = rospy.get_param("~termination_metric")
-        self.min_hallway_width = rospy.get_param("~min_hallway_width".format(self.robot_id)) * pu.SCALE
-        self.comm_range = rospy.get_param("~comm_range".format(self.robot_id)) * pu.SCALE
+        self.frontier_threshold = rospy.get_param("~frontier_threshold")
+        self.min_hallway_width = rospy.get_param("~min_hallway_width".format(self.robot_id)) * self.graph_scale
+        self.comm_range = rospy.get_param("~comm_range".format(self.robot_id)) * self.graph_scale
         self.point_precision = rospy.get_param("~point_precision".format(self.robot_id))
-        self.min_edge_length = rospy.get_param("~min_edge_length".format(self.robot_id)) * pu.SCALE
-        self.lidar_scan_radius = rospy.get_param("~lidar_scan_radius".format(self.robot_id)) * pu.SCALE
+        self.min_edge_length = rospy.get_param("~min_edge_length".format(self.robot_id)) * self.graph_scale
+        self.lidar_scan_radius = rospy.get_param("~lidar_scan_radius".format(self.robot_id)) * self.graph_scale
         self.lidar_fov = rospy.get_param("~lidar_fov".format(self.robot_id))
-        self.slope_bias = rospy.get_param("~slope_bias".format(self.robot_id)) * SCALE
-        self.separation_bias = rospy.get_param("~separation_bias".format(self.robot_id)) * pu.SCALE
+        self.slope_bias = rospy.get_param("~slope_bias".format(self.robot_id))
+        self.separation_bias = rospy.get_param("~separation_bias".format(self.robot_id)) * self.graph_scale
         self.opposite_vector_bias = rospy.get_param("~opposite_vector_bias".format(self.robot_id))
-        self.edge_pub = rospy.Publisher("/robot_{}/edge_list".format(self.robot_id), EdgeList, queue_size=10)
+        rospy.Service('/robot_{}/rendezvous'.format(self.robot_id), RendezvousPoints,self.fetch_rendezvous_points_handler)
+        rospy.Service('/robot_{}/explored_region'.format(self.robot_id), ExploredRegion,self.fetch_explored_region_handler)
         rospy.Service('/robot_{}/frontier_points'.format(self.robot_id), FrontierPoint, self.frontier_point_handler)
         rospy.Service('/robot_{}/check_intersections'.format(self.robot_id), Intersections, self.intersection_handler)
-        rospy.Service('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph, self.fetch_graph_handler)
-        self.move_to_stop = rospy.ServiceProxy('/robot_{}/Stop'.format(self.robot_id), Trigger)
         rospy.Subscriber('/robot_{}/map'.format(self.robot_id), OccupancyGrid, self.map_callback)
-        rospy.Subscriber('/shutdown', String, self.shutdown_callback)
+        rospy.Service('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph, self.fetch_edge_handler)
+
         self.already_shutdown = False
         self.robot_pose = None
         self.listener = tf.TransformListener()
-
         # edges
         self.deleted_nodes = {}
         self.deleted_obstacles = {}
+        self.last_graph_update_time = rospy.Time.now().to_sec()
+        rospy.on_shutdown(self.save_all_data)
+        rospy.loginfo('Robot {}: Successfully created graph node'.format(self.robot_id))
 
     def spin(self):
         r = rospy.Rate(0.1)
         while not rospy.is_shutdown():
             try:
+                if not self.edges:
+                    self.generate_graph()
                 r.sleep()
             except Exception as e:
                 rospy.logerr('Robot {}: Graph node interrupted!: {}'.format(self.robot_id, e))
@@ -113,59 +135,80 @@ class Graph:
                 is_same = False
         return is_same
 
+    def fetch_edge_handler(self, data):
+        self.generate_graph()
+        pose = [0.0] * 2
+        pose[INDEX_FOR_X] = data.pose.position.x
+        pose[INDEX_FOR_Y] = data.pose.position.y
+        robot_pose = pu.scale_up(pose, self.graph_scale)
+        edgelist = self.create_edge_list(robot_pose)
+        return FetchGraphResponse(edgelist=edgelist)
+
+
     def frontier_point_handler(self, request):
         count = request.count
-        map_msg = self.latest_map
-        if not map_msg:
-            map_msg = rospy.wait_for_message("/robot_{}/map".format(self.robot_id), OccupancyGrid)
-        self.compute_graph(map_msg)
-        start_time = time.time()
+        self.generate_graph()
+        start_time = rospy.Time.now().to_sec()
         self.compute_new_information()
         ppoints = []
         selected_leaves = []
-        while len(self.new_information) > 0:
-            best_edge = max(self.new_information, key=self.new_information.get)
-            ridge = self.create_ridge(best_edge)
-            selected_leaves.append(ridge)
-            ppoints.append(best_edge[0][1])
-            del self.new_information[best_edge]
-            if len(selected_leaves) == count:
-                break
-        now = time.time()
-        t = (now - start_time)
-        self.performance_data.append(
-            {'time': rospy.Time.now().to_sec(), 'type': 2, 'robot_id': self.robot_id, 'computational_time': t})
-        if self.debug_mode:
-            if not self.plot_data_active:
-                self.plot_data(ppoints, is_initial=True)
+        try:
+            rospy.logerr(self.new_information)
+            while len(self.new_information) > 0:
+                best_edge = max(self.new_information, key=self.new_information.get)
+                ridge = self.create_ridge(best_edge)
+                selected_leaves.append(ridge)
+                ppoints.append(best_edge[0][1])
+                del self.new_information[best_edge]
+                if len(selected_leaves) == count:
+                    break
+            now = rospy.Time.now().to_sec()
+            t = (now - start_time)
+            self.performance_data.append(
+                {'time': rospy.Time.now().to_sec(), 'type': 2, 'robot_id': self.robot_id, 'computational_time': t})
+            if self.debug_mode:
+                if not self.plot_data_active:
+                    self.plot_data(ppoints, is_initial=True)
+
+        except Exception as e:
+            rospy.logerr(e)
         return FrontierPointResponse(ridges=selected_leaves)
 
     def intersection_handler(self, data):
         pose_data = data.pose
-        map_msg = self.latest_map
-        if not map_msg:
-            map_msg = rospy.wait_for_message("/robot_{}/map".format(self.robot_id), OccupancyGrid)
-        self.compute_graph(map_msg)
+        pu.log_msg(self.robot_id, "Received Intersection request", self.debug_mode)
+        if not self.edges or self.enough_delay():
+            self.generate_graph()
         robot_pose = [0.0] * 2
         robot_pose[INDEX_FOR_X] = pose_data.position.x
         robot_pose[INDEX_FOR_Y] = pose_data.position.y
         result = 0
-        close_edge, intersecs = self.compute_intersections(robot_pose)
-        if intersecs:
-            intersec = intersecs[0]
-            if not self.is_same_intersection(intersec, robot_pose):
+        try:
+            close_edge, intersecs = self.compute_intersections(robot_pose)
+            if intersecs:
+                intersec = intersecs[0]
                 self.last_intersection = intersec
-                rospy.logerr("Intersection: {}".format(intersecs))
-                result = pu.D(pu.scale_down(intersec[0][1]), pu.scale_down(intersec[1][0]))
+                pu.log_msg(self.robot_id, "Intersection: {}".format(intersecs), self.debug_mode)
+                result = pu.D(pu.scale_down(intersec[0][1], self.graph_scale),
+                              pu.scale_down(intersec[1][0], self.graph_scale))
+        except Exception as e:
+            rospy.logerr(e)
+            pass
         return IntersectionsResponse(result=result)
 
-    def fetch_graph_handler(self, data):
-        rospy.logerr("Request received...")
-        robot_pose = (data.pose.position.x, data.pose.position.y)
+    def enough_delay(self):
+        return rospy.Time.now().to_sec() - self.last_graph_update_time > 30  # updated last 20 secs
+
+    def generate_graph(self):
+        self.lock.acquire()
         map_msg = self.latest_map
         if not map_msg:
             map_msg = rospy.wait_for_message("/robot_{}/map".format(self.robot_id), OccupancyGrid)
         self.compute_graph(map_msg)
+        self.last_graph_update_time = rospy.Time.now().to_sec()
+        self.lock.release()
+
+    def create_edge_list(self, robot_pose):
         alledges = list(self.edges)
         edgelist = EdgeList()
         edgelist.header.stamp = rospy.Time.now()
@@ -183,24 +226,39 @@ class Graph:
                     edge_dists[(e, obs)] = d
         if edge_dists:
             new_close_ridge = min(edge_dists, key=edge_dists.get)
-            if self.prev_ridge and self.prev_ridge[0] == new_close_ridge[0]:
-                rospy.logerr("Same edge as old one")
-                new_close_ridge = ((self.prev_ridge[0][1], self.prev_ridge[0][0]), self.prev_ridge[1])
         else:
-            rospy.logerr("No new edge ahead")
             new_close_ridge = ((self.prev_ridge[0][1], self.prev_ridge[0][0]), self.prev_ridge[1])
-
         new_closest_ridge = self.create_ridge(new_close_ridge)
         edgelist.close_ridge = new_closest_ridge
         self.prev_ridge = new_close_ridge
         for k, v in self.pixel_desc.items():
-            pix = Pixel()
-            pix.pose.position.x = k[INDEX_FOR_X]
-            pix.pose.position.y = k[INDEX_FOR_Y]
-            pix.desc = v
-            edgelist.pixels.append(pix)
-        rospy.logerr("Processing complete...")
-        return FetchGraphResponse(edgelist=edgelist)
+            if v != FREE:
+                pix = Pixel()
+                pix.pose.position.x = k[INDEX_FOR_X]
+                pix.pose.position.y = k[INDEX_FOR_Y]
+                pix.desc = v
+                edgelist.pixels.append(pix)
+        return edgelist
+
+    def fetch_rendezvous_points_handler(self, data):
+        count = data.count
+        rendezvous_points = []
+        map_msg = self.latest_map
+        self.compute_graph(map_msg)
+        all_points = list(self.pixel_desc)
+        robot_pose = self.get_robot_pose()
+        origin = pu.scale_up(robot_pose, self.graph_scale)
+
+        free_points = [p for p in all_points if self.pixel_desc[p] == FREE and pu.D(origin, p) <= self.comm_range]
+        if free_points:
+            hull, boundary_points = graham_scan(free_points, count, False)
+            for b in boundary_points:
+                ap = pu.scale_down(b, self.graph_scale)
+                pose = Pose()
+                pose.position.x = ap[INDEX_FOR_X]
+                pose.position.y = ap[INDEX_FOR_Y]
+                rendezvous_points.append(pose)
+        return RendezvousPointsResponse(poses=rendezvous_points)
 
     def get_closest_edge(self, robot_pose, close_edges):
         linear_edge = {}
@@ -214,19 +272,20 @@ class Graph:
         return chosen_edge
 
     def compute_graph(self, occ_grid):
-        start_time = time.time()
+        start_time = rospy.Time.now().to_sec()
         self.get_image_desc(occ_grid)
         try:
             self.compute_hallway_points()
-            now = time.time()
+            now = rospy.Time.now().to_sec()
             t = now - start_time
             self.performance_data.append(
                 {'time': rospy.Time.now().to_sec(), 'type': 0, 'robot_id': self.robot_id, 'computational_time': t})
         except Exception as e:
-            rospy.logerr('Robot {}: Error in graph computation'.format(self.robot_id))
+            pu.log_msg(self.robot_id, 'Robot {}: Error in graph computation'.format(self.robot_id), self.debug_mode)
 
     def get_image_desc(self, occ_grid):
         resolution = occ_grid.info.resolution
+        self.map_resolution = resolution
         origin_pos = occ_grid.info.origin.position
         origin_x = origin_pos.x
         origin_y = origin_pos.y
@@ -243,48 +302,68 @@ class Graph:
                 index[INDEX_FOR_X] = col
                 index = tuple(index)
                 pose = pu.pixel2pose(index, origin_x, origin_y, resolution)
-                scaled_pose = pu.get_point(pu.scale_up(pose))
+                scaled_pose = pu.scale_up(pose, self.graph_scale)
+                scaled_pose = pu.get_point(scaled_pose)
                 p = grid_values[num_rows - row - 1, col]
                 self.pixel_desc[scaled_pose] = p
                 if p == OCCUPIED:
                     self.obstacles[scaled_pose] = OCCUPIED
+                if p == FREE:
+                    self.all_poses.add(pu.get_point(pose))
+
+    # def round_point(self, p):
+    #     xc = round(p[INDEX_FOR_X], 2)
+    #     yc = round(p[INDEX_FOR_Y], 2)
+    #     new_p = [0.0] * 2
+    #     new_p[INDEX_FOR_X] = xc
+    #     new_p[INDEX_FOR_Y] = yc
+    #     new_p = tuple(new_p)
+    #     return new_p
 
     def compute_intersections(self, pose):
-        start = time.time()
+        start = rospy.Time.now().to_sec()
         intersecs = []
         close_edge = []
-        robot_pose = pu.scale_up(pose)
+        robot_pose = pu.scale_up(pose, self.graph_scale)
         closest_ridge = {}
         edge_list = list(self.edges)
         vertex_dict = {}
         for e in edge_list:
             p1 = e[0]
             p2 = e[1]
-            if e in self.edges:
-                o = self.edges[e]
-                width = pu.D(o[0], o[1])
-                if pu.D(p1, p2) > self.min_edge_length:
-                    u_check = pu.W(p1, robot_pose) < width or pu.W(p2, robot_pose) < width
-                    if u_check:
-                        v1 = pu.get_vector(p1, p2)
-                        desc = (v1, width)
-                        vertex_dict[e] = desc
-                        d = min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
-                        closest_ridge[e] = d
+            o = self.edges[e]
+            width = pu.D(o[0], o[1])
+            u_check = pu.W(p1, robot_pose) < width or pu.W(p2, robot_pose) < width
+            if u_check:
+                v1 = pu.get_vector(p1, p2)
+                desc = (v1, width)
+                vertex_dict[e] = desc
+                d = self.distance_to_line(p1, p2, robot_pose)  # min([pu.D(robot_pose, e[0]), pu.D(robot_pose, e[1])])
+                if d != INF:
+                    closest_ridge[e] = d
         if closest_ridge:
             cr = min(closest_ridge, key=closest_ridge.get)
             if closest_ridge[cr] < vertex_dict[cr][1]:
                 close_edge = cr
                 intersecs = self.process_decision(vertex_dict, close_edge, robot_pose)
-                if self.debug_mode:
-                    if not self.plot_intersection_active and intersecs:
-                        self.plot_intersections(None, close_edge, intersecs, robot_pose)
+            if self.debug_mode:
+                if not self.plot_intersection_active:  # and intersecs:
+                    self.plot_intersections(None, close_edge, intersecs, robot_pose)
 
-                now = time.time()
-                t = (now - start)
-                self.performance_data.append(
-                    {'time': rospy.Time.now().to_sec(), 'type': 1, 'robot_id': self.robot_id, 'computational_time': t})
+        now = rospy.Time.now().to_sec()
+        t = (now - start)
+        self.performance_data.append(
+            {'time': rospy.Time.now().to_sec(), 'type': 1, 'robot_id': self.robot_id, 'computational_time': t})
         return close_edge, intersecs
+
+    def distance_to_line(self, p1, p2, pose):
+        p2_p1_vec = pu.get_vector(p1, p2)
+        pose_p1_vec = pu.get_vector(p1, pose)
+        if p2_p1_vec[0] != 0 and p2_p1_vec[1] != 0:
+            d = norm(np.cross(p2_p1_vec, pose_p1_vec)) / norm(p2_p1_vec)
+        else:
+            d = INF
+        return d
 
     def process_decision(self, vertex_descriptions, ridge, robot_pose):
         r_desc = vertex_descriptions[ridge]
@@ -292,38 +371,93 @@ class Graph:
         w1 = r_desc[1]
         p1 = ridge[0]
         p2 = ridge[1]
-        intersections = []
         intesec_pose = {}
         for j, desc in vertex_descriptions.items():
-            if j != ridge and (ridge[0] not in j or ridge[1] not in j):
+            if j != ridge:  # and (ridge[0] not in j or ridge[1] not in j):
                 p3 = j[1]
                 v2 = desc[0]
-                if self.lidar_scan_radius < pu.D(robot_pose, p3) < self.comm_range:
-                    if pu.there_is_unknown_region(p2, p3, self.pixel_desc):
-                        if pu.collinear(p1, p2, p3, w1, self.slope_bias):
-                            cos_theta, separation = pu.compute_similarity(v1, v2, ridge, j)
-                            if -1 <= cos_theta <= -1 + self.opposite_vector_bias and abs(
-                                    separation - w1) < self.separation_bias:
-                                # intersections.append((ridge, j))
-                                intesec_pose[pu.D(robot_pose, p3)] = (ridge, j)
-                            else:
-                                # rospy.logerr("Cos theta: {}".format(cos_theta))
-                                pass
+                w2 = desc[1]
+                # if self.lidar_scan_radius < pu.D(p2, p3) < self.comm_range:
+                if pu.D(robot_pose, p3) < self.comm_range:
+                    if pu.collinear(p1, p2, p3, w1, self.slope_bias):
+                        cos_theta, separation = pu.compute_similarity(v1, v2, ridge, j)
+                        if -1 <= cos_theta <= -1 + self.opposite_vector_bias and abs(separation) < abs(w1 - w2):
+                            intesec_pose[pu.D(p2, p3)] = (ridge, j)
                         else:
-                            # rospy.logerr("Collinear: {}".format(pu.collinear(p1, p2, p3, w1, self.slope_bias)))
+                            # pu.log_msg(self.robot_id,"Costheta: {}, Separation: {}, corridor: {}".format(cos_theta, abs(separation),abs(w1 - w2)),self.debug_mode)
                             pass
                     else:
-                        # rospy.logerr("Is in Unknown region: {}".format(pu.there_is_unknown_region(p2, p3, self.pixel_desc)))
+                        # pu.log_msg(self.robot_id, "Collinear: {}".format(pu.collinear(p1, p2, p3, w1, self.slope_bias)),
+                        #            self.debug_mode)
+                        pass
+                else:
+                    # pu.log_msg(self.robot_id, "Comm range: {}".format(pu.D(p2, p3)), self.debug_mode)
+                    pass
+
+        intersections = self.get_pairs_with_unknown_area(intesec_pose)
+        return intersections
+
+    def get_pairs_with_unknown_area(self, edge_pairs):
+        edge_boxes = {}
+        pair_dist = {}
+        intersections = []
+        for dist, pair in edge_pairs.items():
+            p1 = pair[0][1]
+            p2 = pair[1][1]
+            x_min = min([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])
+            y_min = min([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])
+            x_max = max([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])
+            y_max = max([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])
+            min_points = max([abs(x_max - x_min), abs(y_max - y_min)])
+            bbox = sg.box(x_min, y_min, x_max, y_max)
+            edge_boxes[pair] = (bbox, min_points)
+            pair_dist[pair] = dist
+        if edge_boxes:
+            actual_pairs = {}
+            actual_intersecs = {}
+            for p, v in self.pixel_desc.items():
+                if v == UNKNOWN:
+                    point = sg.Point(p[INDEX_FOR_X], p[INDEX_FOR_Y])
+                    for pair, values in edge_boxes.items():
+                        if values[0].contains(point):
+                            if pair not in actual_intersecs:
+                                actual_intersecs[pair] = 1
+                            else:
+                                actual_intersecs[pair] += 1
+            for pair, count in actual_intersecs.items():
+                if count >= edge_boxes[pair][1]:
+                    actual_pairs[pair_dist[pair]] = pair
+            if actual_pairs:
+                min_dist = min(actual_pairs.keys())
+                intersections.append(actual_pairs[min_dist])
+        return intersections
+
+    def get_intersection(self, robot_pose, e1, e2, o1, o2):
+        p1 = e1[0]
+        p2 = e1[1]
+        v1 = pu.get_vector(p1, p2)
+        width1 = pu.D(o1[0], o1[1])
+        p3 = e2[0]
+        p4 = e2[1]
+        width2 = pu.D(o2[0], o2[1])
+        v2 = pu.get_vector(p3, p4)
+        intersec = None
+        if self.lidar_scan_radius < pu.D(p2, p4) < self.comm_range:
+            if pu.there_is_unknown_region(p2, p4, self.pixel_desc):
+                if pu.collinear(p1, p2, p4, width1, self.slope_bias):
+                    cos_theta, separation = pu.compute_similarity(v1, v2, e1, e2)
+                    if -1 <= cos_theta <= -1 + self.opposite_vector_bias and abs(
+                            separation - width1) < self.separation_bias:
+                        intersec = (e1, e2)
+                    else:
                         pass
                 else:
                     pass
-        if intesec_pose:
-            min_dist = min(intesec_pose.keys())
-            intersections.append(intesec_pose[min_dist])
-        return intersections
+            else:
+                pass
+        return intersec
 
     def compute_hallway_points(self):
-        self.lock.acquire()
         obstacles = list(self.obstacles)
         if obstacles:
             vor = Voronoi(obstacles)
@@ -334,31 +468,140 @@ class Graph:
             for i in range(len(ridge_vertices)):
                 ridge_vertex = ridge_vertices[i]
                 ridge_point = ridge_points[i]
-                if ridge_vertex[0] != -1 or ridge_vertex[1] != -1:
-                    p1 = [0.0] * 2
-                    p2 = [0.0] * 2
-                    p1[INDEX_FOR_X] = vertices[ridge_vertex[0]][INDEX_FOR_X]
-                    p1[INDEX_FOR_Y] = vertices[ridge_vertex[0]][INDEX_FOR_Y]
-                    p2[INDEX_FOR_X] = vertices[ridge_vertex[1]][INDEX_FOR_X]
-                    p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
+                p1 = [0] * 2
+                p2 = [0] * 2
+                p1[INDEX_FOR_X] = vertices[ridge_vertex[0]][INDEX_FOR_X]
+                p1[INDEX_FOR_Y] = vertices[ridge_vertex[0]][INDEX_FOR_Y]
+                p2[INDEX_FOR_X] = vertices[ridge_vertex[1]][INDEX_FOR_X]
+                p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
+                p1 = pu.get_point(tuple(p1))
+                p2 = pu.get_point(tuple(p2))
+                if self.is_free(p1) and self.is_free(p2):
+                    e = (p1, p2)
                     q1 = obstacles[ridge_point[0]]
                     q2 = obstacles[ridge_point[1]]
-                    o = (q1, q2)
-                    p1 = pu.get_point(p1)
-                    p2 = pu.get_point(p2)
-                    # if q1 in self.deleted_obstacles and q2 in self.deleted_obstacles:  # avoiding all deleted edges
-                    #     rospy.logerr("Deleted edge: {}".format((p1, p2)))
-                    #     continue
-                    if pu.is_free(p1, self.pixel_desc) and pu.is_free(p2, self.pixel_desc) and pu.D(q1,
-                                                                                                    q2) > self.min_hallway_width:
-                        e = (p1, p2)
+                    o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
+                    if pu.D(q1, q2) > self.min_hallway_width:
                         self.edges[e] = o
             self.get_adjacency_list(self.edges)
             self.connect_subtrees()
             self.merge_similar_edges()
-            # add edges to processed edges
 
-        self.lock.release()
+    def merge_graphs(self):
+        if self.old_edges and self.edges:
+            edge1, subtree1, parents1 = self.localize_robot(self.robot_pose, self.old_adj_list, self.old_edges)
+            edge2, subtree2, parents2 = self.localize_robot(self.robot_pose, self.adj_list, self.edges)
+            edge_pair = (edge1, edge2)
+            self.remove_subtrees(edge1, self.old_edges, self.old_adj_list)
+            self.remove_subtrees(edge2, self.edges, self.adj_list)
+            self.link_edges(edge_pair, self.old_edges, self.edges)
+            self.get_adjacency_list(self.edges)
+        else:
+            print("empty subtree")
+
+    def fetch_explored_region_handler(self, data):
+        if self.latest_map and self.enough_delay():
+            self.get_image_desc(self.latest_map)
+        pixel_points = list(self.all_poses)
+        poses = []
+        for p in pixel_points:
+            pose = Pose()
+            pose.position.x = p[INDEX_FOR_X]
+            pose.position.y = p[INDEX_FOR_Y]
+            poses.append(pose)
+        return ExploredRegionResponse(poses=poses, resolution=self.map_resolution)
+
+    def already_exists(self, p):
+        pose = [0.0] * 2
+        pose[INDEX_FOR_X] = round(p[INDEX_FOR_X])
+        pose[INDEX_FOR_Y] = round(p[INDEX_FOR_Y])
+        pose = tuple(pose)
+        return pose in self.deleted_nodes
+
+    def localize_robot(self, robot_pose, adj_list, edges):
+        dists = {}
+        s = list(adj_list.keys())[0]
+        visited = {}
+        parents = {s: None}
+        S = [s]
+        while len(S) > 0:
+            u = S.pop()
+            neighbors = adj_list[u]
+            for v in neighbors:
+                if v not in visited:
+                    S.append(v)
+                    parents[v] = u
+                    dists[pu.D(robot_pose, v)] = (u, v)
+            visited[u] = None
+        close_edge = dists[min(dists.keys())]
+        subtree, parents = self.get_subtree(close_edge, adj_list)
+        return close_edge, subtree, parents
+
+    def remove_subtrees(self, close_edge, edges, adj_list):
+        visited = [close_edge[0]]
+        S = [close_edge[1]]
+        while len(S) > 0:
+            u = S.pop()
+            neighbors = adj_list[u]
+            for v in neighbors:
+                if v not in visited:
+                    S.append(v)
+                    e = (u, v)
+                    if e != close_edge:
+                        if e in edges:
+                            del edges[e]
+            visited.append(u)
+
+    def link_edges(self, edge_pair, edges1, edges2):
+        e1 = edge_pair[0]
+        e2 = edge_pair[1]
+        if e1 in edges1:
+            obs1 = edges1[e1]
+        else:
+            obs1 = edges1[(e1[1], e1[0])]
+        if e2 in edges2:
+            obs2 = edges2[e2]
+        else:
+            obs2 = edges2[(e2[1], e2[0])]
+        obs = obs1
+        w1 = pu.D(obs1[0], obs1[1])
+        w2 = pu.D(obs2[0], obs2[1])
+        if w2 > w1:
+            obs = obs2
+
+        new_edge = (e1[1], e2[1])
+        del edges1[e1]
+        del edges2[e2]
+        edges2[new_edge] = obs
+        edges2.update(edges1)
+
+    def get_subtree(self, edge, adj_list):
+        S = [edge[1]]
+        visited = [edge[0]]
+        parents = {edge[1]: edge[0]}
+        leaves = set()
+        while len(S) > 0:
+            u = S.pop()
+            neighbors = adj_list[u]
+            if len(neighbors) <= 1:
+                leaves.add(u)
+            for v in neighbors:
+                if v not in visited:
+                    S.append(v)
+                    parents[v] = u
+            visited.append(u)
+        tree = set()
+        for l in leaves:
+            self.get_path(l, parents[l], parents, tree)
+        subtree = list(tree)
+        return subtree, parents
+
+    def get_path(self, leaf, parent, parents, tree):
+        l = leaf
+        while parents[l] != parent:
+            l = parents[l]
+            tree.add(l)
+        tree.add(l)
 
     def merge_records(self):
         old_nodes = list(self.adj_list)
@@ -398,17 +641,17 @@ class Graph:
         if N == len(self.adj_dict[self.longest]):  # or count == 10:
             self.get_adjacency_list(self.edges)
             return
-        allnodes = []
+        allnodes = []  # all leaves for every search
         for k, v in self.leave_dict.items():
             allnodes += v
-        allnodes = list(set(allnodes))
+        allnodes = list(set(allnodes))  # deal with only unique leaves
         for leaf, adj in self.adj_dict.items():
             adj_leaves = self.leave_dict[leaf]
             leaf_dist = {}
             for l in adj_leaves:
                 dist_dict = {}
                 for n2 in allnodes:
-                    if n2 not in adj:
+                    if n2 not in adj and n2 not in adj_leaves:
                         dist_dict[n2] = pu.D(l, n2)
                 if dist_dict:
                     nei = min(dist_dict, key=dist_dict.get)
@@ -452,20 +695,39 @@ class Graph:
         edge_list = list(edge_dict)
         self.adj_list.clear()
         self.leaf_slope.clear()
+        self.global_leaves.clear()
+        self.leaf_edges.clear()
         for e in edge_list:
             first = e[0]
             second = e[1]
-            if first in self.adj_list:
-                self.adj_list[first].add(second)
+            if first != second:
+                if first in self.adj_list:
+                    self.adj_list[first].add(second)
+                else:
+                    self.adj_list[first] = {second}
+                if second in self.adj_list:
+                    self.adj_list[second].add(first)
+                else:
+                    self.adj_list[second] = {first}
             else:
-                self.adj_list[first] = {second}
-            if second in self.adj_list:
-                self.adj_list[second].add(first)
-            else:
-                self.adj_list[second] = {first}
+                del edge_dict[e]
         for k, v in self.adj_list.items():
             if len(v) == 1:
-                self.leaf_slope[k] = pu.theta(list(v)[0], k)
+                parent = list(v)[0]
+                self.leaf_slope[k] = pu.theta(parent, k)
+                self.global_leaves[k] = parent
+                if (parent, k) in self.edges:
+                    self.leaf_edges[k] = (parent, k)
+                    self.leaf_obstacles[k] = self.edges[(parent, k)]
+
+    def is_free(self, p):
+        xc = int(np.round(p[INDEX_FOR_X]))
+        yc = int(np.round(p[INDEX_FOR_Y]))
+        new_p = [0] * 2
+        new_p[INDEX_FOR_X] = xc
+        new_p[INDEX_FOR_Y] = yc
+        new_p = tuple(new_p)
+        return new_p in self.pixel_desc and self.pixel_desc[new_p] == FREE
 
     def get_edge(self, ridge):
         edge = {}
@@ -490,7 +752,7 @@ class Graph:
             Q = (q1, q2)
             edge[P] = Q
         except:
-            rospy.logerr("Invalid goal")
+            pu.log_msg(self.robot_id, "Invalid goal", self.debug_mode)
 
         return edge
 
@@ -514,7 +776,7 @@ class Graph:
         ridge = Ridge()
         ridge.nodes = [p1, p2]
         ridge.obstacles = [q1, q2]
-        ridge.scale = pu.SCALE
+        ridge.scale = self.graph_scale
 
         return ridge
 
@@ -556,7 +818,7 @@ class Graph:
             ax.plot(y, x, "g-o")
         plt.grid()
         plt.axis('off')
-        plt.savefig("gvgexplore/map_update_{}_{}_{}.png".format(self.robot_id, time.time(), self.run))
+        plt.savefig("{}/map_update_{}_{}_{}.png".format(self.method, self.robot_id, time.time(), self.run))
 
         plt.close()
         # plt.show()
@@ -624,9 +886,6 @@ class Graph:
                                 else:
                                     self.edges[(parents[u], v)] = self.edges[(parents[u], u)]
                                 del self.adj_list[u]
-                                # obs = self.edges[(parents[u], v)]
-                                # self.deleted_obstacles[obs[0]] = None
-                                # self.deleted_obstacles[obs[1]] = None
                             else:
                                 parents[v] = u
                         else:
@@ -656,7 +915,15 @@ class Graph:
                 self.leaf_slope[k] = pu.theta(k, list(v)[0])
         self.adj_list = new_adj_list
         self.edges = edges
-        # self.deleted_nodes.update(deleted_nodes)  # add all the new deleted nodes
+        self.save_deleted_nodes(deleted_nodes)
+
+    def save_deleted_nodes(self, deleted_nodes):
+        for v, _ in deleted_nodes.items():
+            pose = [0.0] * 2
+            pose[INDEX_FOR_X] = round(v[INDEX_FOR_X])
+            pose[INDEX_FOR_Y] = round(v[INDEX_FOR_Y])
+            pose = tuple(pose)
+            self.deleted_nodes[pose] = None  # add all the new deleted nodes
 
     def add_edge(self, edge, new_edges):
         obst = ((0, 0), (0, 0))
@@ -684,34 +951,117 @@ class Graph:
         return [p for p in points if self.pixel_desc[p] == OCCUPIED]
 
     def compute_new_information(self):
-        resolution = 1
-        frontier_size = {}
         self.new_information.clear()
-        self.known_points.clear()
-        self.unknown_points.clear()
-        leaf_copy = copy.deepcopy(self.leaf_slope)
-        edges_copy = copy.deepcopy(self.edges)
-        adjlist_copy = copy.deepcopy(self.adj_list)
-        for leaf, slope in leaf_copy.items():
-            obs = None
-            edge = (list(adjlist_copy[leaf])[0], leaf)
-            redge = (leaf, list(adjlist_copy[leaf])[0])
-            if edge in edges_copy:
-                obs = edges_copy[edge]
-            elif redge in edges_copy:
-                obs = edges_copy[redge]
-            if obs:
-                frontier_size[leaf] = pu.D(obs[0], obs[1])
-                ks, us = self.area(leaf, slope)
-                unknown_area = len(us) * resolution ** 2
-                self.new_information[(edge, obs)] = unknown_area
-                self.known_points[(edge, obs)] = ks
-                self.unknown_points[(edge, obs)] = us
+        rospy.logerr("leaves: {}".format(self.leaf_edges))
+        leaf_obstacles = copy.deepcopy(self.leaf_obstacles)
+        leaf_edges = copy.deepcopy(self.leaf_edges)
+        polygons, start_end, points, unknown_points, marker_points = self.get_leaf_region(leaf_edges,
+                                                                                          leaf_obstacles)
+        for leaf, edge in leaf_edges.items():
+            if self.is_frontier({leaf: edge[0]}, points[leaf]):
+                edge = leaf_edges[leaf]
+                obs = leaf_obstacles[leaf]
+                self.new_information[(edge, obs)] = unknown_points[leaf]
 
-    def area(self, point, orientation):
+    def is_frontier(self, edge, leaf_region):
+        leaf = list(edge.keys())[0]
+        leaf = pu.get_point(leaf)
+        full_cells = {pu.get_point(p): self.pixel_desc[p] for p in leaf_region}
+        full_cells[leaf] = FREE
+        frontiers = {}
+        self.flood_fill(full_cells, None, leaf, [], frontiers)
+        return len(frontiers) > 0
+
+    def flood_fill(self, cells, prev_point, new_point, visited, frontiers):
+        if new_point not in cells or new_point in visited:
+            return
+        if prev_point and cells[new_point] != cells[prev_point]:
+            if cells[new_point] == UNKNOWN:
+                frontiers[prev_point] = new_point
+            return
+        north_p = list(new_point)
+        east_p = list(new_point)
+        west_p = list(new_point)
+        south_p = list(new_point)
+        north_p[INDEX_FOR_X] += 1
+        east_p[INDEX_FOR_X] -= 1
+        south_p[INDEX_FOR_Y] += 1
+        west_p[INDEX_FOR_Y] -= 1
+        prev_point = new_point
+        visited.append(new_point)
+
+        self.flood_fill(cells, prev_point, tuple(north_p), visited, frontiers)
+        self.flood_fill(cells, prev_point, tuple(east_p), visited, frontiers)
+        self.flood_fill(cells, prev_point, tuple(south_p), visited, frontiers)
+        self.flood_fill(cells, prev_point, tuple(west_p), visited, frontiers)
+
+    def get_leaf_region(self, leaf_edges, leaf_obstacles):
+        polygons = {}
+        start_end = {}
+        for leaf, edge in leaf_edges.items():
+            parent = edge[0]
+            obs = leaf_obstacles[leaf]
+            width = pu.D(obs[0], obs[1])
+            radius = self.lidar_scan_radius
+
+            x = leaf[0]
+            y = leaf[1]
+
+            opp = width / 2.0
+            adj = radius
+            hyp = np.sqrt(opp ** 2 + adj ** 2)
+            theta1 = pu.theta(parent, leaf)
+            angle_sum = (np.pi / 2) + theta1
+            cos_val = opp * np.cos(angle_sum)
+            sin_val = opp * np.sin(angle_sum)
+
+            top_left_x = x + cos_val
+            top_left_y = y + sin_val
+
+            bottom_left_x = x - cos_val
+            bottom_left_y = y - sin_val
+
+            lx = x + hyp * np.cos(theta1)
+            ly = y + hyp * np.sin(theta1)
+
+            top_right_x = lx + cos_val
+            top_right_y = ly + sin_val
+
+            bottom_right_x = lx - cos_val
+            bottom_right_y = ly - sin_val
+
+            polygon = Polygon([(bottom_left_x, bottom_left_y), (top_left_x, top_left_y), (top_right_x, top_right_y),
+                               (bottom_right_x, bottom_right_y)])
+
+            polygons[leaf] = polygon
+            start_end[leaf] = (leaf, (lx, ly))
+
+        points = {}
+        unknown_points = {}
+        leaf_keys = leaf_edges.keys()
+        marker_points = []
+        for pose, value in self.pixel_desc.items():
+            point = sg.Point(pose[INDEX_FOR_X], pose[INDEX_FOR_Y])
+            for leaf in leaf_keys:
+                if polygons[leaf].contains(point):
+                    marker_points.append(pose)
+                    if leaf not in points:
+                        points[leaf] = [pose]
+                    else:
+                        points[leaf].append(pose)
+                    if value == UNKNOWN:
+                        if leaf not in unknown_points:
+                            unknown_points[leaf] = 1
+                        else:
+                            unknown_points[leaf] += 1
+        return polygons, start_end, points, unknown_points, marker_points
+
+    def area(self, point, orientation, radius):
         known_points = []
         unknown_points = []
-        radius = int(round(self.lidar_scan_radius))
+        if radius > self.lidar_scan_radius:
+            radius = self.lidar_scan_radius
+        radius = int(round(radius))
         for d in np.arange(0, radius, 1):
             distance_points = []
             for theta in range(-1 * self.lidar_fov // 2, self.lidar_fov + 1):
@@ -721,11 +1071,11 @@ class Graph:
                 pt = [0.0] * 2
                 pt[INDEX_FOR_X] = x
                 pt[INDEX_FOR_Y] = y
-                pt = tuple(pt)
+                pt = pu.get_point(pt)
                 distance_points.append(pt)
-            unique_points = list(set(distance_points))
+            unique_points = set(distance_points)
             for p in unique_points:
-                if pu.is_free(p, self.pixel_desc) or pu.is_obstacle(p, self.pixel_desc):
+                if not pu.is_unknown(p, self.pixel_desc):
                     known_points.append(p)
                 else:
                     unknown_points.append(p)
@@ -762,7 +1112,7 @@ class Graph:
             for i in range(len(x_pairs)):
                 x = x_pairs[i]
                 y = y_pairs[i]
-                ax.plot(x, y, "g-o")
+                ax.plot(x, y, "g-.")
             leaves = list(self.leaf_slope)
             lx, ly = zip(*leaves)
             ax.scatter(lx, ly, color='red', marker='*', s=MARKER_SIZE)
@@ -770,13 +1120,13 @@ class Graph:
             fx, fy = zip(*frontiers)
             ax.scatter(fx, fy, color='goldenrod', marker="D", s=MARKER_SIZE + 4)
             pose = self.get_robot_pose()
-            point = pu.scale_up([pose])
-            ax.scatter(point[INDEX_FOR_X], point[INDEX_FOR_Y], color='goldenrod', marker="D", s=MARKER_SIZE + 4)
+            point = pu.scale_up(pose, self.graph_scale)
+            ax.scatter(point[INDEX_FOR_X], point[INDEX_FOR_Y], color='green', marker="D", s=MARKER_SIZE + 4)
             plt.grid()
         except:
             pass
         # plt.axis('off')
-        plt.savefig("gvgexplore/plot_{}_{}_{}.png".format(self.robot_id, time.time(), self.run))
+        plt.savefig("{}/plot_{}_{}_{}.png".format(self.method, self.robot_id, time.time(), self.run))
         plt.close()
         # plt.show()
         self.plot_data_active = False
@@ -814,13 +1164,15 @@ class Graph:
             y = y_pairs[i]
             ax.plot(x, y, "g-.")
         plt.grid()
-        plt.savefig(
-            "gvgexplore/intersections_{}_{}_{}.png".format(self.robot_id, time.time(),
+        plt.savefig("{}/intersections_{}_{}_{}.png".format(self.method, self.robot_id, time.time(),
                                                            self.run))  # TODO consistent time.
         plt.close(fig)
         self.plot_intersection_active = False
 
     def get_robot_pose(self):
+        if self.method == 'recurrent' and self.robot_id == self.robot_count:
+            rospy.logerr("Robot id: {} count: {}, pose: {}".format(self.robot_id, self.robot_count, self.bs_pose))
+            return self.bs_pose
         robot_pose = None
         while not robot_pose:
             try:
@@ -832,19 +1184,17 @@ class Graph:
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 sleep(1)
-            except:
+            except Exception as e:
+                rospy.logerr(e)
                 pass
 
         return robot_pose
 
-    def shutdown_callback(self, msg):
-        self.save_all_data()
-        rospy.signal_shutdown('Graph: Shutdown command received!')
-
     def save_all_data(self):
         save_data(self.performance_data,
-                  "gvgexplore/performance_{}_{}_{}_{}_{}.pickle".format(self.environment, self.robot_count, self.run,
-                                                                        self.termination_metric, self.robot_id))
+                  "{}/performance_{}_{}_{}_{}_{}.pickle".format(self.method, self.environment, self.robot_count,
+                                                                self.run,
+                                                                self.termination_metric, self.robot_id))
 
 
 if __name__ == "__main__":

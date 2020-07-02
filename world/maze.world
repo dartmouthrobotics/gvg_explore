@@ -43,11 +43,3 @@ pioneer3at
   color "red"
   pose [-8.0 12.0 0.0 0.0]
 )
-
-# Put two robots into the world
-pioneer3at
-(
-  name "robot2"
-  color "blue"
-  pose [-8.0 8.0 0.0 0.0]
-)

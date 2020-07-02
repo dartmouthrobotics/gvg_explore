@@ -2,6 +2,8 @@ import math
 import numpy as np
 import pickle
 from os import path
+import rospy
+import shapely.geometry as sg
 
 TOTAL_COVERAGE = 1
 MAXIMUM_EXPLORATION_TIME = 2
@@ -29,13 +31,10 @@ LOST = 9  # An action client can determine that a goal is LOST. This should not 
 def save_data(data, file_name):
     saved_data = []
     if not path.exists(file_name):
-        f = open(file_name, "wb+")
+        f = open(file_name, "wb")
         f.close()
-    else:
-        saved_data = load_data_from_file(file_name)
-    saved_data += data
     with open(file_name, 'wb') as fp:
-        pickle.dump(saved_data, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(data, fp, protocol=pickle.HIGHEST_PROTOCOL)
         fp.close()
 
 
@@ -67,7 +66,6 @@ def pixel2pose(point, origin_x, origin_y, resolution):
     return tuple(new_p)
 
 
-
 def get_vector(p1, p2):
     xv = p2[INDEX_FOR_X] - p1[INDEX_FOR_X]
     yv = p2[INDEX_FOR_Y] - p1[INDEX_FOR_Y]
@@ -85,6 +83,7 @@ def theta(p, q):
 
 
 def D(p, q):
+    # rospy.logerr("Params: {}, {}".format(p, q))
     dx = q[INDEX_FOR_X] - p[INDEX_FOR_X]
     dy = q[INDEX_FOR_Y] - p[INDEX_FOR_Y]
     return math.sqrt(dx ** 2 + dy ** 2)
@@ -136,8 +135,8 @@ def line_points(p1, p2, parts):
     points = []
     for p in pts:
         point = [0.0] * 2
-        point[INDEX_FOR_X] = round(p[0], PRECISION)
-        point[INDEX_FOR_Y] = round(p[1], PRECISION)
+        point[INDEX_FOR_X] = round(p[0], 2)
+        point[INDEX_FOR_Y] = round(p[1], 2)
         points.append(tuple(point))
     return points
 
@@ -175,18 +174,18 @@ def collinear(p1, p2, p3, width, bias):
     return False
 
 
-def scale_up(pose):
+def scale_up(pose, scale):
     p = [0.0] * 2
-    p[INDEX_FOR_X] = round(pose[INDEX_FOR_X] * SCALE, PRECISION)
-    p[INDEX_FOR_Y] = round(pose[INDEX_FOR_Y] * SCALE, PRECISION)
+    p[INDEX_FOR_X] = round(pose[INDEX_FOR_X] * scale, PRECISION)
+    p[INDEX_FOR_Y] = round(pose[INDEX_FOR_Y] * scale, PRECISION)
     p = tuple(p)
     return p
 
 
-def scale_down(pose):
+def scale_down(pose, scale):
     p = [0.0] * 2
-    p[INDEX_FOR_X] = pose[INDEX_FOR_X] / SCALE
-    p[INDEX_FOR_Y] = pose[INDEX_FOR_Y] / SCALE
+    p[INDEX_FOR_X] = pose[INDEX_FOR_X] / scale
+    p[INDEX_FOR_Y] = pose[INDEX_FOR_Y] / scale
     p = tuple(p)
     return p
 
@@ -208,14 +207,21 @@ def separation(e1, e2):
     p2 = e1[1]
     p3 = e2[0]
     p4 = e2[1]
-    c1 = p1[INDEX_FOR_Y] - slope(p1, p2) * p1[INDEX_FOR_X]
-    c2 = p4[INDEX_FOR_Y] - slope(p3, p4) * p4[INDEX_FOR_X]
-    return abs(c1 - c2)
+    p2_p3 = W(p2, p3)
+    return p2_p3
+    # c1 = p1[INDEX_FOR_Y] - slope(p1, p2) * p1[INDEX_FOR_X]
+    # c2 = p4[INDEX_FOR_Y] - slope(p3, p4) * p4[INDEX_FOR_X]
+    # return abs(c1 - c2)
 
 
 def is_free(p, pixel_desc):
     rounded_pose = get_point(p)
     return rounded_pose in pixel_desc and pixel_desc[rounded_pose] == FREE
+
+
+def is_unknown(p, pixel_desc):
+    rounded_pose = get_point(p)
+    return rounded_pose in pixel_desc and pixel_desc[rounded_pose] == UNKNOWN
 
 
 def is_obstacle(p, pixel_desc):
@@ -233,6 +239,28 @@ def get_point(p):
     return new_p
 
 
+def bresenham_path(p1, p2):
+    points = []
+    x1 = p1[INDEX_FOR_X]
+    y1 = p1[INDEX_FOR_Y]
+    x2 = p2[INDEX_FOR_X]
+    y2 = p2[INDEX_FOR_Y]
+    x = x1
+    y = y1
+    dx = x2 - x1
+    dy = y2 - y1
+    p = 2 * dx - dy
+    while (x <= x2):
+        points.append((x, y))
+        x += 1
+        if p < 0:
+            p = p + 2 * dy
+        else:
+            p = p + 2 * dy - 2 * dx
+            y += 1
+    return points
+
+
 def reject_outliers(data):
     raw_x = [v[INDEX_FOR_X] for v in data]
     raw_y = [v[INDEX_FOR_Y] for v in data]
@@ -244,6 +272,11 @@ def reject_outliers(data):
     return raw_x, raw_y
 
 
+def log_msg(robot_id, msg, debug):
+    if debug:
+        rospy.logerr("Robot {}: {}".format(robot_id, msg))
+
+
 def in_range(point, polygon):
     x = point[INDEX_FOR_X]
     y = point[INDEX_FOR_Y]
@@ -251,57 +284,54 @@ def in_range(point, polygon):
         INDEX_FOR_Y]
 
 
-def create_polygon(pose, for_frontiers, origin_x, origin_y, width, height, comm_range):
-    x = pose[INDEX_FOR_X]
-    y = pose[INDEX_FOR_Y]
-    first = [0] * 2
-    second = [0] * 2
-    third = [0] * 2
-    fourth = [0] * 2
-    #
-    if for_frontiers:
-        first[INDEX_FOR_Y] = origin_x
-        first[INDEX_FOR_X] = origin_x
+def creat_polygon(leaf, parent, width, radius):
+    x = leaf[0]
+    y = leaf[1]
 
-        second[INDEX_FOR_Y] = origin_x
-        second[INDEX_FOR_X] = origin_y + height
+    opp = width / 2.0
+    adj = radius
+    hyp = np.sqrt(opp ** 2 + adj ** 2)
+    theta1 = theta(parent, leaf)
+    angle_sum = (np.pi / 2) + theta1
+    cos_val = opp * np.cos(angle_sum)
+    sin_val = opp * np.sin(angle_sum)
 
-        third[INDEX_FOR_Y] = origin_x + width
-        third[INDEX_FOR_X] = origin_y + height
+    top_left_x = x + cos_val
+    top_left_y = y + sin_val
 
-        fourth[INDEX_FOR_Y] = origin_x + width
-        fourth[INDEX_FOR_X] = origin_y
-    else:
-        first[INDEX_FOR_Y] = x - comm_range
-        first[INDEX_FOR_X] = y - comm_range
+    bottom_left_x = x - cos_val
+    bottom_left_y = y - sin_val
 
-        second[INDEX_FOR_Y] = x - comm_range
-        second[INDEX_FOR_X] = y + comm_range
+    lx = x + hyp * np.cos(theta1)
+    ly = y + hyp * np.sin(theta1)
 
-        third[INDEX_FOR_Y] = x + comm_range
-        third[INDEX_FOR_X] = y + comm_range
+    top_right_x = lx + cos_val
+    top_right_y = ly + sin_val
 
-        fourth[INDEX_FOR_Y] = x + comm_range
-        fourth[INDEX_FOR_X] = y - comm_range
+    bottom_right_x = lx - cos_val
+    bottom_right_y = ly - sin_val
 
-    ranges = [first, second, third, fourth]
-    return ranges
+    point = Point(test_point[0], test_point[1])
+    polygon = Polygon([(bottom_left_x, bottom_left_y), (top_left_x, top_left_y), (top_right_x, top_right_y),
+                       (bottom_right_x, bottom_right_y)])
+    print(polygon.contains(point))
+
+    points = [parent, leaf, (lx, ly), (bottom_left_x, bottom_left_y), (top_left_x, top_left_y),
+              (top_right_x, top_right_y), (bottom_right_x, bottom_right_y)]
+    return points
 
 
 def there_is_unknown_region(p1, p2, pixel_desc, min_ratio=4.0):
-    x_min = int(round(min([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])))
-    y_min = int(round(min([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])))
-    x_max = int(round(max([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])))
-    y_max = int(round(max([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])))
-    points = []
+    x_min = min([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])
+    y_min = min([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])
+    x_max = max([p1[INDEX_FOR_X], p2[INDEX_FOR_X]])
+    y_max = max([p1[INDEX_FOR_Y], p2[INDEX_FOR_Y]])
+    min_points = max([abs(x_max - x_min), abs(y_max - y_min)])
+    bbox = sg.box(x_min, y_min, x_max, y_max)
     point_count = 0
-    for x in range(x_min, x_max + 1):
-        for y in range(y_min, y_max + 1):
-            point_count += 1
-            region_point = [0.0] * 2
-            region_point[INDEX_FOR_X] = float(x)
-            region_point[INDEX_FOR_Y] = float(y)
-            region_point = tuple(region_point)
-            if region_point in pixel_desc and pixel_desc[region_point] == UNKNOWN:
-                points.append(region_point)
-    return len(points) >= point_count / min_ratio
+    for p, v in pixel_desc.items():
+        if v == UNKNOWN:
+            p = sg.Point(p[INDEX_FOR_X], p[INDEX_FOR_Y])
+            if bbox.contains(p):
+                point_count += 1
+    return point_count >= min_points
