@@ -1,9 +1,9 @@
 <launch>
-    <param name="use_sim_time" value="true" />
-    <node name="Stage" pkg="stage_ros" type="stageros" args="$(find gvgexplore)/world/maze.world">
-        <param name="base_watchdog_timeout" value="0" />
-    </node>
-    <node name="R0_MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 0 0 0 /map /robot_0/map 100"/>
+<!--    <param name="use_sim_time" value="true" />-->
+<!--    <node name="Stage" pkg="stage_ros" type="stageros" args="$(find gvgexplore)/world/maze.world">-->
+<!--        <param name="base_watchdog_timeout" value="0" />-->
+<!--    </node>-->
+<!--    <node name="R0_MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 0 0 0 /map /robot_0/map 100"/>-->
     <group ns="robot_0">
         <param name="robot_id" value="1" />
         <param name="tf_prefix" type="string" value="robot_0"/>
@@ -20,17 +20,12 @@
         </node>
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
-
-<!--        <node name="scan_filter" pkg="gvgexplore" type="scan_filter.py">-->
-<!--            <param name="robot_id" value="0" />-->
-<!--            <rosparam command="load" file="$(find gvgexplore)/param/gvg_config.yaml" subst_value="true"/>-->
-<!--        </node>-->
         <include file="$(find gvgexplore)/launch/robot.launch">
             <arg name="robot_name" value="0" />
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="1" />
         </include>
     </group>
-    <node name="RVIZ" pkg="rviz" type="rviz" args=" -d $(find gvgexplore)/param/maze.rviz" output="screen" />
+<!--    <node name="RVIZ" pkg="rviz" type="rviz" args=" -d $(find gvgexplore)/param/maze.rviz" output="screen" />-->
 </launch>
 
