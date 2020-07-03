@@ -20,7 +20,7 @@
         </node>
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
-        <node name="sbridge" pkg="rosbot_webui" type="serial_bridge" output="screen"/>
+<!--        <node name="sbridge" pkg="rosbot_webui" type="serial_bridge" output="screen"/>-->
         <include file="$(find rplidar_ros)/launch/rplidar.launch"/>
         <include file="$(find gvgexplore)/launch/robot.launch">
             <arg name="robot_name" value="0" />
