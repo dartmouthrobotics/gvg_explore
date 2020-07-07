@@ -3,7 +3,7 @@
 <!--    <node name="Stage" pkg="stage_ros" type="stageros" args="$(find gvgexplore)/world/maze.world">-->
 <!--        <param name="base_watchdog_timeout" value="0" />-->
 <!--    </node>-->
-    <node name="R0_MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 3.14 0 0 /base_link /laser 1"/>
+    <node name="R0_MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 3.14 0 0 /base_link /laser 10"/>
     <group ns="robot_0">
         <param name="robot_id" value="1" />
         <param name="tf_prefix" type="string" value="robot_0"/>
