@@ -20,8 +20,8 @@
         </node>
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
-        <!-- include file="$(find rplidar_ros)/launch/rplidar.launch"/>-->
-       <!--  <include file="$(find rosbot_description)/launch/gmapping.launch"/>-->
+        <include file="$(find rplidar_ros)/launch/rplidar.launch"/>
+        <include file="$(find rosbot_description)/launch/gmapping.launch"/>
         <include file="$(find gvgexplore)/launch/robot.launch">
             <arg name="robot_name" value="0" />
             <arg name="robot_type" value="2" />
