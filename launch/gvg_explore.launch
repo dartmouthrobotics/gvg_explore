@@ -25,13 +25,22 @@
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="1" />
         </include>
-     <node pkg="gvgexplore" type="forward_node.py" name="forward_node"/>
+        <node pkg="gvgexplore" type="forward_node.py" name="forward_node"/>
+         <include file="$(find rplidar_ros)/launch/rplidar.launch">
+             <arg name="robot_name" value="robot_4"/>
+         </include>
+
      </group>
-     <include file="$(find rplidar_ros)/launch/rplidar.launch">
-           <arg name="robot_name" value="robot_4"/>
-        </include>
-     <node pkg="rosbot_webui" type="serial_bridge.sh" name="serial_bridge" ns="robot_4" output="screen">
-         <remap from="/pose" to="pose"/>
-     </node>
+
+    <node pkg="rosbot_webui" type="serial_bridge.sh" name="serial_bridge" output="screen"/>
+
+    <node name="master_discovery" pkg="master_discovery_fkie" type="master_discovery" >
+        <param name="_mcast_group" value="224.0.0.1"/>
+    </node>
+    <!-- <node pkg="topic_tools" type="relay" name="$(arg robot_name)_relay" args="/karto_out /$(arg robot_name)/karto_out" /> -->
+    <node name="master_sync" pkg="master_sync_fkie" type="master_sync" output="screen">
+        <rosparam param="ignore_nodes"> ['/serial_node'] </rosparam>
+    </node>
+
 </launch>
 
