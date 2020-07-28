@@ -24,6 +24,7 @@
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="1" />
         </include>
+     <node pkg="gvgexplore" type="forward_node.py" name="forward_node"/>
      </group>
      <include file="$(find rplidar_ros)/launch/rplidar.launch">
            <arg name="robot_name" value="robot_4"/>
@@ -31,6 +32,5 @@
      <node pkg="rosbot_webui" type="serial_bridge.sh" name="serial_bridge" ns="robot_4" output="screen">
          <remap from="/pose" to="pose"/>
      </node>
-
 </launch>
 
