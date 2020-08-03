@@ -35,7 +35,7 @@
     </node>
     <!-- <node pkg="topic_tools" type="relay" name="$(arg robot_name)_relay" args="/karto_out /$(arg robot_name)/karto_out" /> -->
     <node name="master_sync" pkg="master_sync_fkie" type="master_sync" output="screen">
-        <rosparam param="ignore_nodes"> ['/rplidarNode',/serial_node','/Mapper','/GetMap','/R0_BaseAlign','/SetGoal','/navigator','/operator'] </rosparam>
+        <rosparam param="ignore_nodes"> ['/rplidarNode','/serial_node','/Mapper','/GetMap','/R0_BaseAlign','/SetGoal','/navigator','/operator'] </rosparam>
     </node>
 
 
