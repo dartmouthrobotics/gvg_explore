@@ -1,36 +1,32 @@
 <launch>
-    <node name="R0_BaseAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 3.14 0 0 /base_link /laser 10"/>
-     <group ns="robot_4">
-        <param name="robot_id" value="4"/>
-        <param name="tf_prefix" type="string" value="robot_4"/>
+   <node name="R0_BaseAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 3.14 0 0 /base_link /laser 10"/>
         <rosparam file="$(find gvgexplore)/param/ros.yaml"/>
         <node pkg="nav2d_operator" type="operator" name="operator" output="screen">
             <rosparam file="$(find gvgexplore)/param/operator.yaml"/>
             <rosparam file="$(find gvgexplore)/param/costmap1.yaml" ns="local_map" />
-            <param name="robot_frame" value="base_link"/>
-            <param name="odometry_frame" value="odom"/>
+            <param name="robot_frame" value="base_link"/> 
+            <param name="odometry_frame" value="odom"/> 
         </node>
         <node pkg="nav2d_navigator" type="navigator" name="navigator">
             <rosparam file="$(find gvgexplore)/param/navigator.yaml"/>
-            <param name="robot_id" value="4"/>
-        </node>
-        <node pkg="nav2d_karto" name="Mapper" type="mapper">
-            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
-            
         </node>
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
         <include file="$(find gvgexplore)/launch/robot.launch">
-            <arg name="robot_name" value="4" />
+            <arg name="robot_name" value="8" />
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="1" />
         </include>
-        <node pkg="gvgexplore" type="forward_node.py" name="forward_node"/>
-         <include file="$(find rplidar_ros)/launch/rplidar.launch">
-             <arg name="robot_name" value="robot_4"/>
-         </include>
+<!--        <node pkg="gvgexplore" type="forward_node.py" name="forward_node"/> -->
 
-     </group>
+     <node pkg="nav2d_karto" name="Mapper" type="mapper">
+            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
+
+        </node>
+
+     <include file="$(find rplidar_ros)/launch/rplidar.launch">
+             <arg name="robot_name" value="robot_8"/>
+     </include>
 
     <node pkg="rosbot_webui" type="serial_bridge.sh" name="serial_bridge" output="screen"/>
 
