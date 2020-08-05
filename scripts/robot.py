@@ -540,6 +540,7 @@ class Robot:
         return SharedPointResponse(auction_accepted=1, res_data=auction)
 
     def initial_data_callback(self, buff_data):
+        rospy.logerr("Received data from another robot")
         sender_id = buff_data.msg_header.header.frame_id
         self.process_data({sender_id: buff_data})
         # ============ used during initialization ============
@@ -618,6 +619,7 @@ class Robot:
                 sleep(1)
             except:
                 pass
+        rospy.logerr("Pose: {}".format(robot_pose))
         return robot_pose
 
     def cancel_exploration(self):
