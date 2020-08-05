@@ -204,7 +204,7 @@ class Graph:
         self.lock.acquire()
         map_msg = self.latest_map
         if not map_msg:
-            map_msg = rospy.wait_for_message("/robot_{}/map".format(self.robot_id), OccupancyGrid)
+            map_msg = rospy.wait_for_message("/map".format(self.robot_id), OccupancyGrid)
         self.compute_graph(map_msg)
         self.last_graph_update_time = rospy.Time.now().to_sec()
         self.lock.release()
@@ -1177,11 +1177,11 @@ class Graph:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("robot_{}/map".format(self.robot_id),
-                                               "robot_{}/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/map".format(self.robot_id),
+                                               "/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("robot_{}/map".format(self.robot_id),
-                                                                     "robot_{}/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
+                                                                     "/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 sleep(1)
