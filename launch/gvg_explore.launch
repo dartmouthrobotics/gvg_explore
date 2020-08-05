@@ -1,5 +1,6 @@
 <launch>
     <arg name="robot_id"/>
+    <arg name="base_station"/>
    <node name="BaseAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 3.14 0 0 /base_link /laser 10"/>
     <node name="MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 0 0 0 /map /robot_$(arg robot_id)/map 100"/>
         <rosparam file="$(find gvgexplore)/param/ros.yaml"/>
@@ -19,7 +20,7 @@
         <include file="$(find gvgexplore)/launch/robot.launch">
             <arg name="robot_name" value="$(arg robot_id)" />
             <arg name="robot_type" value="2" />
-            <arg name="base_stations" value="1" />
+            <arg name="base_stations" value="$(arg base_station)" />
         </include>
        </group>
         <node pkg="nav2d_karto" name="Mapper" type="mapper">
