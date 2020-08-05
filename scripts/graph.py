@@ -98,7 +98,7 @@ class Graph:
         rospy.Service('/robot_{}/explored_region'.format(self.robot_id), ExploredRegion,self.fetch_explored_region_handler)
         rospy.Service('/robot_{}/frontier_points'.format(self.robot_id), FrontierPoint, self.frontier_point_handler)
         rospy.Service('/robot_{}/check_intersections'.format(self.robot_id), Intersections, self.intersection_handler)
-        rospy.Subscriber('/robot_{}/map'.format(self.robot_id), OccupancyGrid, self.map_callback)
+        rospy.Subscriber('/map'.format(self.robot_id), OccupancyGrid, self.map_callback)
         rospy.Service('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph, self.fetch_edge_handler)
 
         self.already_shutdown = False
@@ -122,6 +122,7 @@ class Graph:
                 rospy.logerr('Robot {}: Graph node interrupted!: {}'.format(self.robot_id, e))
 
     def map_callback(self, data):
+        rospy.logerr("Received map message")
         self.latest_map = data
 
     def is_same_intersection(self, intersec, robot_pose):
