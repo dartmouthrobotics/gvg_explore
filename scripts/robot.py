@@ -219,7 +219,7 @@ class Robot:
     def goto_first_frontier(self):
         if self.initial_receipt:
             sleep(5)
-            frontier_point_response = self.fetch_frontier_points(FrontierPointRequest(count=2))
+            frontier_point_response = self.fetch_frontier_points(FrontierPointRequest(count=1))
             frontier_points = self.parse_frontier_response(frontier_point_response)
             if frontier_points:
                 ridge = list(frontier_points.values())[0]
