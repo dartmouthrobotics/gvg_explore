@@ -27,9 +27,7 @@
             <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
         </node>
 
-     <include file="$(find rplidar_ros)/launch/rplidar.launch">
-             <arg name="robot_name" value="robot_$(arg robot_id)"/>
-     </include>
+     <include file="$(find rplidar_ros)/launch/rplidar.launch"/>
 
     <node pkg="rosbot_webui" type="serial_bridge.sh" name="serial_bridge" output="screen"/>
 
