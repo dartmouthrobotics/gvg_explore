@@ -226,6 +226,7 @@ class Robot:
                 if ridge:
                     self.frontier_ridge = ridge
             if self.frontier_ridge:
+                rospy.logerr("received a goal point")
                 self.initial_receipt = False
                 self.start_exploration_action(self.frontier_ridge)
                 pu.log_msg(self.robot_id, "Action sent to gvgexplore", self.debug_mode)
@@ -323,6 +324,7 @@ class Robot:
 
     def map_update_callback(self, data):
         self.last_map_update_time = rospy.Time.now().to_sec()
+        self.map_updating=False
         self.goto_first_frontier()
 
     def wait_for_updates(self):
@@ -563,8 +565,10 @@ class Robot:
 
     def start_exploration_action(self, frontier_ridge):
         while self.map_updating:  # wait for map to update
+            rospy.logerr("waiting for map update")
             sleep(1)
         self.feedback_count = 0
+        rospy.logerr("received action to move.......")
         self.gvgexplore_goal_pub.publish(frontier_ridge)
 
     def parse_frontier_response(self, data):
@@ -609,11 +613,11 @@ class Robot:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("robot_{}/map".format(self.robot_id),
-                                               "robot_{}/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/map".format(self.robot_id),
+                                               "/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("robot_{}/map".format(self.robot_id),
-                                                                     "robot_{}/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
+                                                                     "/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 sleep(1)
