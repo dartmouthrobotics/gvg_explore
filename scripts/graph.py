@@ -147,6 +147,7 @@ class Graph:
 
 
     def frontier_point_handler(self, request):
+        rospy.logerr("received a request")
         count = request.count
         self.generate_graph()
         start_time = rospy.Time.now().to_sec()
@@ -170,8 +171,9 @@ class Graph:
             if self.debug_mode:
                 if not self.plot_data_active:
                     self.plot_data(ppoints, is_initial=True)
-
+            rospy.logerr('computed frontier result')
         except Exception as e:
+            rospy.logerr("got an exception")
             rospy.logerr(e)
         return FrontierPointResponse(ridges=selected_leaves)
 
@@ -960,9 +962,9 @@ class Graph:
                                                                                           leaf_obstacles)
         for leaf, edge in leaf_edges.items():
             if self.is_frontier({leaf: edge[0]}, points[leaf]):
-                edge = leaf_edges[leaf]
-                obs = leaf_obstacles[leaf]
-                self.new_information[(edge, obs)] = unknown_points[leaf]
+            	edge = leaf_edges[leaf]
+            	obs = leaf_obstacles[leaf]
+            	self.new_information[(edge, obs)] = unknown_points[leaf]
 
     def is_frontier(self, edge, leaf_region):
         leaf = list(edge.keys())[0]

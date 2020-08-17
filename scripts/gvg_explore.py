@@ -99,21 +99,21 @@ class GVGExplore:
         self.environment = rospy.get_param("~environment")
         self.max_coverage_ratio = rospy.get_param("~max_coverage")
         self.method = rospy.get_param("~method")
-        rospy.Subscriber("/robot_{}/MoveTo/status".format(self.robot_id), GoalStatusArray, self.move_status_callback)
-        rospy.Subscriber("/robot_{}/MoveTo/result".format(self.robot_id), MoveToPosition2DActionResult,
+        rospy.Subscriber("/MoveTo/status".format(self.robot_id), GoalStatusArray, self.move_status_callback)
+        rospy.Subscriber("/MoveTo/result".format(self.robot_id), MoveToPosition2DActionResult,
                          self.move_result_callback)
-        rospy.Subscriber("/robot_{}/navigator/plan".format(self.robot_id), GridCells, self.navigation_plan_callback)
-        self.move_to_stop = rospy.ServiceProxy('/robot_{}/Stop'.format(self.robot_id), Trigger)
-        self.moveTo_pub = rospy.Publisher("/robot_{}/MoveTo/goal".format(self.robot_id), MoveToPosition2DActionGoal,
+        rospy.Subscriber("/navigator/plan".format(self.robot_id), GridCells, self.navigation_plan_callback)
+        self.move_to_stop = rospy.ServiceProxy('/Stop'.format(self.robot_id), Trigger)
+        self.moveTo_pub = rospy.Publisher("/MoveTo/goal".format(self.robot_id), MoveToPosition2DActionGoal,
                                           queue_size=10)
         self.vertex_publisher = rospy.Publisher("/robot_{}/explore/vertices".format(self.robot_id), Marker,
                                                 queue_size=10)
         self.leaf_publisher = rospy.Publisher("/robot_{}/explore/leaf_region".format(self.robot_id), Marker,
                                               queue_size=10)
-        self.edge_publisher = rospy.Publisher("/robot_{}/explore/edges".format(self.robot_id), Marker, queue_size=10)
+        self.edge_publisher = rospy.Publisher("/explore/edges".format(self.robot_id), Marker, queue_size=10)
         self.fetch_graph = rospy.ServiceProxy('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph)
-        self.pose_publisher = rospy.Publisher("/robot_{}/cmd_vel".format(self.robot_id), Twist, queue_size=1)
-        rospy.Subscriber("/robot_{}/odom".format(self.robot_id), Odometry, callback=self.pose_callback)
+        self.pose_publisher = rospy.Publisher("/cmd_vel".format(self.robot_id), Twist, queue_size=1)
+        rospy.Subscriber("/odom/wheel".format(self.robot_id), Odometry, callback=self.pose_callback)
         rospy.Subscriber('/robot_{}/gvgexplore/goal'.format(self.robot_id), Ridge, self.initial_action_handler)
         rospy.Service('/robot_{}/gvgexplore/cancel'.format(self.robot_id), CancelExploration,
                       self.received_prempt_handler)
@@ -171,6 +171,7 @@ class GVGExplore:
         scaled_pose = pu.scale_down(leaf, self.graph_scale)
         self.moving_to_frontier = True
         self.motion_failed = False
+        rospy.logerr("First Moving to goal: {}".format(scaled_pose))
         self.move_robot_to_goal(scaled_pose, 0)
         while self.moving_to_frontier:
             sleep(1)
@@ -558,7 +559,7 @@ class GVGExplore:
         id_val = "robot_{}_{}_explore".format(self.robot_id, self.goal_count)
         self.goal_count += 1
         move = MoveToPosition2DActionGoal()
-        frame_id = '/robot_{}/map'.format(self.robot_id)
+        frame_id = 'map'
         move.header.frame_id = frame_id
         move.goal_id.id = id_val
         move.goal.target_pose.x = goal[INDEX_FOR_X]
@@ -567,6 +568,7 @@ class GVGExplore:
         move.goal.header.frame_id = frame_id
         move.goal.target_distance = self.target_distance
         move.goal.target_angle = self.target_angle
+        rospy.logerr("goal position published: {}".format(goal))
         self.moveTo_pub.publish(move)
         self.prev_pose = self.get_robot_pose()
         self.start_time = rospy.Time.now().secs
@@ -606,7 +608,7 @@ class GVGExplore:
 
     def create_marker_array(self, points, pose):
         marker = Marker()
-        marker.header.frame_id = 'map'
+        marker.header.frame_id = '/map'
         marker.header.stamp = rospy.Time.now()
         marker.id = 0
         marker.type = Marker.SPHERE_LIST
@@ -640,6 +642,7 @@ class GVGExplore:
         if data.status:
             if data.status.status == pu.ABORTED:
                 pu.log_msg(self.robot_id, "Motion failed", self.debug_mode)
+                rospy.logerr(data)
                 self.move_to_stop()
                 self.motion_failed = True
                 self.has_arrived = True
@@ -720,7 +723,7 @@ class GVGExplore:
 
         # # Publish the edges
         edges = list(self.edges)
-        marker.header.frame_id = 'map'
+        marker.header.frame_id = '/map'
         marker.header.stamp = rospy.Time.now()
         marker.id = 0
         marker.type = Marker.LINE_LIST
@@ -814,11 +817,11 @@ class GVGExplore:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("robot_{}/map".format(self.robot_id),
-                                               "robot_{}/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/map".format(self.robot_id),
+                                               "/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("robot_{}/map".format(self.robot_id),
-                                                                     "robot_{}/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
+                                                                     "/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 time.sleep(1)
