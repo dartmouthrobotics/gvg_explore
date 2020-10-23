@@ -613,11 +613,11 @@ class Robot:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("/map".format(self.robot_id),
-                                               "/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/robot_{}/map".format(self.robot_id),
+                                               "robot_{}/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
-                                                                     "/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/robot_{}/map".format(self.robot_id),
+                                                                     "/robot_{}/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 sleep(1)

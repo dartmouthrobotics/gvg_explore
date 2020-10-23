@@ -98,8 +98,9 @@ class Graph:
         rospy.Service('/robot_{}/explored_region'.format(self.robot_id), ExploredRegion,self.fetch_explored_region_handler)
         rospy.Service('/robot_{}/frontier_points'.format(self.robot_id), FrontierPoint, self.frontier_point_handler)
         rospy.Service('/robot_{}/check_intersections'.format(self.robot_id), Intersections, self.intersection_handler)
-        rospy.Subscriber('/map'.format(self.robot_id), OccupancyGrid, self.map_callback)
+        rospy.Subscriber('/robot_{}/map'.format(self.robot_id), OccupancyGrid, self.map_callback)
         rospy.Service('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph, self.fetch_edge_handler)
+
 
         self.already_shutdown = False
         self.robot_pose = None
@@ -124,6 +125,13 @@ class Graph:
     def map_callback(self, data):
         rospy.logerr("Received map message")
         self.latest_map = data
+
+        # just for testing
+        self.generate_graph()
+        if not self.plot_data_active:
+            self.plot_data([], is_initial=True)
+            rospy.logerr('Plotting complete')
+        # testing ends here
 
     def is_same_intersection(self, intersec, robot_pose):
         is_same = True
@@ -203,13 +211,13 @@ class Graph:
         return rospy.Time.now().to_sec() - self.last_graph_update_time > 30  # updated last 20 secs
 
     def generate_graph(self):
-        self.lock.acquire()
+        # self.lock.acquire()
         map_msg = self.latest_map
         if not map_msg:
             map_msg = rospy.wait_for_message("/map".format(self.robot_id), OccupancyGrid)
         self.compute_graph(map_msg)
         self.last_graph_update_time = rospy.Time.now().to_sec()
-        self.lock.release()
+        # self.lock.release()
 
     def create_edge_list(self, robot_pose):
         alledges = list(self.edges)
@@ -283,6 +291,7 @@ class Graph:
             t = now - start_time
             self.performance_data.append(
                 {'time': rospy.Time.now().to_sec(), 'type': 0, 'robot_id': self.robot_id, 'computational_time': t})
+
         except Exception as e:
             pu.log_msg(self.robot_id, 'Robot {}: Error in graph computation'.format(self.robot_id), self.debug_mode)
 
@@ -479,16 +488,17 @@ class Graph:
                 p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
                 p1 = pu.get_point(tuple(p1))
                 p2 = pu.get_point(tuple(p2))
-                if self.is_free(p1) and self.is_free(p2):
-                    e = (p1, p2)
-                    q1 = obstacles[ridge_point[0]]
-                    q2 = obstacles[ridge_point[1]]
-                    o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
-                    if pu.D(q1, q2) > self.min_hallway_width:
-                        self.edges[e] = o
-            self.get_adjacency_list(self.edges)
-            self.connect_subtrees()
-            self.merge_similar_edges()
+                # if self.is_free(p1) and self.is_free(p2):
+                e = (p1, p2)
+                q1 = obstacles[ridge_point[0]]
+                q2 = obstacles[ridge_point[1]]
+                o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
+                # if pu.D(q1, q2) > self.min_hallway_width:
+                #     self.edges[e] = o
+                self.edges[e] = o
+            # self.get_adjacency_list(self.edges)
+            # self.connect_subtrees()
+            # self.merge_similar_edges()
 
     def merge_graphs(self):
         if self.old_edges and self.edges:
@@ -1085,6 +1095,7 @@ class Graph:
         return known_points, unknown_points
 
     def plot_data(self, frontiers, is_initial=False, vertext=None):
+        rospy.logerr("Creating plot started")
         self.plot_data_active = True
         plt.figure(figsize=(12, 9))
         ax = plt.subplot(111)
@@ -1132,6 +1143,7 @@ class Graph:
         plt.savefig("{}/plot_{}_{}_{}.png".format(self.method, self.robot_id, time.time(), self.run))
         plt.close()
         # plt.show()
+        rospy.logerr("Creating plot completed")
         self.plot_data_active = False
 
     def plot_intersections(self, ax, ridge, intersections, point):
@@ -1179,11 +1191,11 @@ class Graph:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("/map".format(self.robot_id),
-                                               "/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/robot_{}/map".format(self.robot_id),
+                                               "/robot_{}/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
-                                                                     "/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/robot_{}/map".format(self.robot_id),
+                                                                     "/robot_{}/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 sleep(1)
