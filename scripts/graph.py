@@ -6,7 +6,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import math
 import numpy as np
-from scipy.spatial import Voronoi
+from scipy.spatial import Voronoi, voronoi_plot_2d
 import time
 import rospy
 from threading import Lock
@@ -28,15 +28,51 @@ from numpy.linalg import norm
 import shapely.geometry as sg
 from shapely.geometry.polygon import Polygon
 
+from visualization_msgs.msg import Marker
+from tf import TransformListener
+from geometry_msgs.msg import Point
+from scipy.ndimage import minimum_filter
+
 INF = 100000
 SCALE = 10
 FREE = 0.0
-OCCUPIED = 100.0
+OCCUPIED = 90.0
 UNKNOWN = -1.0
 SMALL = 0.000000000001
 FONT_SIZE = 16
 MARKER_SIZE = 12
+    
+class Grid:
+    def __init__(self, map_msg):
+        self.frame_id = map_msg.header.frame_id
+        self.origin_translation = [map_msg.info.origin.position.x, map_msg.info.origin.position.y, map_msg.info.origin.position.z]
+        self.origin_quaternion = [map_msg.info.origin.orientation.x, map_msg.info.origin.orientation.y, map_msg.info.origin.orientation.z, map_msg.info.origin.orientation.w]
+        self.grid = np.reshape(map_msg.data, (map_msg.info.height, map_msg.info.width))
+        self.resolution = map_msg.info.resolution
+        #self.plot()
 
+    def plot(self):
+        import matplotlib.pyplot as plt
+        fig1 = plt.gcf()
+        plt.imshow(self.grid)
+        plt.colorbar()
+        plt.gca().invert_yaxis()
+        plt.xlabel('xlabel', fontsize=18)
+        plt.ylabel('ylabel', fontsize=16)
+        fig1.savefig('map.png', dpi=100)
+
+
+    def cell_at(self, x, y):
+        return self.grid[y, x]
+        #return self.grid[x + y * self.width]
+
+    def is_free(self, x, y):
+        row_index = int(y)
+        col_index = int(x)
+        if 0 <= row_index < self.grid.shape[0] and 0 <= col_index < self.grid.shape[1]: 
+            return 0 <= self.grid[int(y), int(x)] < 50
+        else:
+            return False
 
 class Graph:
     def __init__(self, robot_id=-1):
@@ -73,7 +109,7 @@ class Graph:
 
         self.latest_map = None
         self.prev_ridge = None
-        rospy.init_node("graph_node")
+
         self.robot_id = rospy.get_param("~robot_id")
         self.robot_count = rospy.get_param("~robot_count")
         self.environment = rospy.get_param("~environment")
@@ -112,25 +148,54 @@ class Graph:
         rospy.on_shutdown(self.save_all_data)
         rospy.loginfo('Robot {}: Successfully created graph node'.format(self.robot_id))
 
+        self.marker_pub = rospy.Publisher('voronoi', Marker, queue_size=0)
+        self.tf = TransformListener()
+
+    def publish_edges(self):
+        transformation_matrix = self.tf.fromTranslationRotation(self.latest_map.origin_translation, self.latest_map.origin_quaternion)
+        print transformation_matrix
+
+        m = Marker() 
+        m.header.frame_id = self.latest_map.frame_id
+        m.type = Marker.LINE_LIST
+        m.color.a = 1.0
+        m.color.r = 1.0
+        m.scale.x = 0.1
+        for e in self.edges.keys():
+            for p in e:
+                p_t = transformation_matrix.dot(np.array([p[0]* self.latest_map.resolution, p[1]* self.latest_map.resolution, 0, 1]) ) 
+                p_ros = Point(x=p_t[0], y=p_t[1])
+                if p_t[1] < 0:
+                    rospy.logerr("negative {} {}".format(p[0], p[1]))
+                m.points.append(p_ros)
+        self.marker_pub.publish(m)
+
+            
+
     def spin(self):
         r = rospy.Rate(0.1)
         while not rospy.is_shutdown():
             try:
-                if not self.edges:
-                    self.generate_graph()
+                #if not self.edges:
+                #    self.generate_graph()
                 r.sleep()
             except Exception as e:
                 rospy.logerr('Robot {}: Graph node interrupted!: {}'.format(self.robot_id, e))
 
-    def map_callback(self, data):
+    def map_callback(self, map_msg):
         rospy.logerr("Received map message")
-        self.latest_map = data
+        start_time_clock = time.clock()
+        self.latest_map = Grid(map_msg)
+        end_time_clock = time.clock()
+        print("generate obstacles1 {}".format(end_time_clock - start_time_clock))
 
         # just for testing
         self.generate_graph()
+        """
         if not self.plot_data_active:
             self.plot_data([], is_initial=True)
             rospy.logerr('Plotting complete')
+        """
         # testing ends here
 
     def is_same_intersection(self, intersec, robot_pose):
@@ -212,10 +277,9 @@ class Graph:
 
     def generate_graph(self):
         # self.lock.acquire()
-        map_msg = self.latest_map
-        if not map_msg:
-            map_msg = rospy.wait_for_message("/map".format(self.robot_id), OccupancyGrid)
-        self.compute_graph(map_msg)
+        if not self.latest_map:
+            self.latest_map = rospy.wait_for_message("/map".format(self.robot_id), OccupancyGrid)
+        self.compute_graph()
         self.last_graph_update_time = rospy.Time.now().to_sec()
         # self.lock.release()
 
@@ -282,33 +346,41 @@ class Graph:
             chosen_edge = linear_edge[min(linear_edge.keys())]
         return chosen_edge
 
-    def compute_graph(self, occ_grid):
+    def convert_coordinates_i_to_xy(self, i):
+        x = i % self.latest_map.info.width # col
+        y = i / self.latest_map.info.width # row
+        return x, y
+
+    def compute_graph(self):
         start_time = rospy.Time.now().to_sec()
-        self.get_image_desc(occ_grid)
-        try:
+        #self.get_image_desc(occ_grid)
+        #try:
+        if True:
             self.compute_hallway_points()
             now = rospy.Time.now().to_sec()
             t = now - start_time
             self.performance_data.append(
                 {'time': rospy.Time.now().to_sec(), 'type': 0, 'robot_id': self.robot_id, 'computational_time': t})
 
-        except Exception as e:
-            pu.log_msg(self.robot_id, 'Robot {}: Error in graph computation'.format(self.robot_id), self.debug_mode)
+        #except Exception as e:
+        #    pu.log_msg(self.robot_id, 'Robot {}: Error in graph computation'.format(self.robot_id), self.debug_mode)
+
+
 
     def get_image_desc(self, occ_grid):
-        resolution = occ_grid.info.resolution
-        self.map_resolution = resolution
-        origin_pos = occ_grid.info.origin.position
-        origin_x = origin_pos.x
-        origin_y = origin_pos.y
+        self.map_resolution = occ_grid.info.resolution
+        origin_x = occ_grid.info.origin.position.x
+        origin_y = occ_grid.info.origin.position.y
         height = occ_grid.info.height
         width = occ_grid.info.width
         grid_values = np.array(occ_grid.data).reshape((height, width)).astype(np.float32)
         num_rows = grid_values.shape[0]
         num_cols = grid_values.shape[1]
         self.obstacles.clear()
-        for row in range(num_rows):
-            for col in range(num_cols):
+
+        """
+        for row in xrange(num_rows):
+            for col in xrange(num_cols):
                 index = [0] * 2
                 index[INDEX_FOR_Y] = num_rows - row - 1
                 index[INDEX_FOR_X] = col
@@ -322,6 +394,7 @@ class Graph:
                     self.obstacles[scaled_pose] = OCCUPIED
                 if p == FREE:
                     self.all_poses.add(pu.get_point(pose))
+        """
 
     # def round_point(self, p):
     #     xc = round(p[INDEX_FOR_X], 2)
@@ -470,35 +543,69 @@ class Graph:
         return intersec
 
     def compute_hallway_points(self):
-        obstacles = list(self.obstacles)
-        if obstacles:
-            vor = Voronoi(obstacles)
-            vertices = vor.vertices
-            ridge_vertices = vor.ridge_vertices
-            ridge_points = vor.ridge_points
-            self.edges.clear()
-            for i in range(len(ridge_vertices)):
-                ridge_vertex = ridge_vertices[i]
-                ridge_point = ridge_points[i]
-                p1 = [0] * 2
-                p2 = [0] * 2
-                p1[INDEX_FOR_X] = vertices[ridge_vertex[0]][INDEX_FOR_X]
-                p1[INDEX_FOR_Y] = vertices[ridge_vertex[0]][INDEX_FOR_Y]
-                p2[INDEX_FOR_X] = vertices[ridge_vertex[1]][INDEX_FOR_X]
-                p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
-                p1 = pu.get_point(tuple(p1))
-                p2 = pu.get_point(tuple(p2))
-                # if self.is_free(p1) and self.is_free(p2):
+        #obstacles = list(self.obstacles)
+        start_time_clock = time.clock()
+        #grid_values = np.array(self.latest_map.data).reshape((self.latest_map.info.height, self.latest_map.info.width))
+        # condition: find neighbors minimum. If value greater than, then ok -- i.e., obstacle adjacent to freespace.
+        f2 = np.asarray([
+            [1, 1, 1],
+            [1, 0, 1],
+            [1, 1, 1]
+        ])
+        neighbor_condition = self.latest_map.grid > minimum_filter(self.latest_map.grid, footprint=f2, mode='constant', cval=10000)
+        obstacles = np.nonzero((self.latest_map.grid >= OCCUPIED) & neighbor_condition)
+        obstacles = np.stack((obstacles[1], obstacles[0]), axis=1)
+        end_time_clock = time.clock()
+        print("generate obstacles2 {}".format(end_time_clock - start_time_clock))
+
+
+        start_time_clock = time.clock()
+        vor = Voronoi(obstacles)
+        end_time_clock = time.clock()
+        print("voronoi {}".format(end_time_clock - start_time_clock))
+        fig = voronoi_plot_2d(vor)
+        from matplotlib import pyplot as plt  
+        plt.xlabel('xlabel', fontsize=18)
+        plt.ylabel('ylabel', fontsize=16)
+        fig.savefig("voronoi.png")
+
+
+
+        start_time_clock = time.clock()
+        vertices = vor.vertices
+        ridge_vertices = vor.ridge_vertices
+        ridge_points = vor.ridge_points
+        self.edges.clear()
+        for i in xrange(len(ridge_vertices)):
+            ridge_vertex = ridge_vertices[i]
+            if ridge_vertex[0] == -1 or ridge_vertex[1] == -1:
+                continue
+            ridge_point = ridge_points[i]
+            p1 = [0] * 2
+            p2 = [0] * 2
+            p1[INDEX_FOR_X] = vertices[ridge_vertex[0]][INDEX_FOR_X]
+            p1[INDEX_FOR_Y] = vertices[ridge_vertex[0]][INDEX_FOR_Y]
+            p2[INDEX_FOR_X] = vertices[ridge_vertex[1]][INDEX_FOR_X]
+            p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
+            p1 = pu.get_point(tuple(p1))
+            p2 = pu.get_point(tuple(p2))
+            if self.latest_map.is_free(p1[INDEX_FOR_X], p1[INDEX_FOR_Y]) and self.latest_map.is_free(p2[INDEX_FOR_X], p2[INDEX_FOR_Y]):
                 e = (p1, p2)
-                q1 = obstacles[ridge_point[0]]
-                q2 = obstacles[ridge_point[1]]
-                o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
-                # if pu.D(q1, q2) > self.min_hallway_width:
-                #     self.edges[e] = o
-                self.edges[e] = o
-            # self.get_adjacency_list(self.edges)
-            # self.connect_subtrees()
-            # self.merge_similar_edges()
+            else:
+                continue
+            #q1 = obstacles[ridge_point[0]]
+            #q2 = obstacles[ridge_point[1]]
+            #o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
+            # if pu.D(q1, q2) > self.min_hallway_width:
+            #     self.edges[e] = o
+            self.edges[e] = 1
+        end_time_clock = time.clock()
+        print("ridge {}".format(end_time_clock - start_time_clock))
+
+        self.publish_edges()
+        # self.get_adjacency_list(self.edges)
+        # self.connect_subtrees()
+        # self.merge_similar_edges()
 
     def merge_graphs(self):
         if self.old_edges and self.edges:
@@ -1115,7 +1222,7 @@ class Graph:
             v = self.pixel_desc[p]
             if v != FREE and v != OCCUPIED:
                 unknown_points.append(p)
-        try:
+        if True:
             if unknown_points:
                 UX, UY = zip(*unknown_points)
                 ax.scatter(UX, UY, marker='1', color='gray')
@@ -1123,11 +1230,13 @@ class Graph:
             xr, yr = zip(*obstacles)
             ax.scatter(xr, yr, color='black', marker="1")
             x_pairs, y_pairs = pu.process_edges(self.edges)
+            rospy.logerr("looping " + str(len(x_pairs)))
             for i in range(len(x_pairs)):
                 x = x_pairs[i]
                 y = y_pairs[i]
                 ax.plot(x, y, "g-.")
             leaves = list(self.leaf_slope)
+            """
             lx, ly = zip(*leaves)
             ax.scatter(lx, ly, color='red', marker='*', s=MARKER_SIZE)
 
@@ -1136,10 +1245,12 @@ class Graph:
             pose = self.get_robot_pose()
             point = pu.scale_up(pose, self.graph_scale)
             ax.scatter(point[INDEX_FOR_X], point[INDEX_FOR_Y], color='green', marker="D", s=MARKER_SIZE + 4)
+            """
             plt.grid()
-        except:
-            pass
+        #except:
+        #    pass
         # plt.axis('off')
+        rospy.logerr("looping " + str(self.method))
         plt.savefig("{}/plot_{}_{}_{}.png".format(self.method, self.robot_id, time.time(), self.run))
         plt.close()
         # plt.show()
@@ -1213,5 +1324,7 @@ class Graph:
 
 
 if __name__ == "__main__":
+    rospy.init_node("graph_node")
+
     graph = Graph()
     graph.spin()
