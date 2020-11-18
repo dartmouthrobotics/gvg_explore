@@ -124,7 +124,7 @@ class Graph:
         self.min_hallway_width = rospy.get_param("~min_hallway_width".format(self.robot_id)) * self.graph_scale
         self.comm_range = rospy.get_param("~comm_range".format(self.robot_id)) * self.graph_scale
         self.point_precision = rospy.get_param("~point_precision".format(self.robot_id))
-        self.min_edge_length = rospy.get_param("~min_edge_length".format(self.robot_id)) * self.graph_scale
+        self.min_edge_length = rospy.get_param("~min_edge_length".format(self.robot_id)) #* self.graph_scale
         self.lidar_scan_radius = rospy.get_param("~lidar_scan_radius".format(self.robot_id)) * self.graph_scale
         self.lidar_fov = rospy.get_param("~lidar_fov".format(self.robot_id))
         self.slope_bias = rospy.get_param("~slope_bias".format(self.robot_id))
@@ -153,7 +153,7 @@ class Graph:
 
     def publish_edges(self):
         transformation_matrix = self.tf.fromTranslationRotation(self.latest_map.origin_translation, self.latest_map.origin_quaternion)
-        print transformation_matrix
+        print (transformation_matrix)
 
         m = Marker() 
         m.header.frame_id = self.latest_map.frame_id
@@ -187,8 +187,7 @@ class Graph:
         start_time_clock = time.clock()
         self.latest_map = Grid(map_msg)
         end_time_clock = time.clock()
-        print("generate obstacles1 {}".format(end_time_clock - start_time_clock))
-
+        rospy.logerr("generate obstacles1 {}".format(end_time_clock - start_time_clock))
         # just for testing
         self.generate_graph()
         """
@@ -196,7 +195,6 @@ class Graph:
             self.plot_data([], is_initial=True)
             rospy.logerr('Plotting complete')
         """
-        # testing ends here
 
     def is_same_intersection(self, intersec, robot_pose):
         is_same = True
@@ -352,19 +350,18 @@ class Graph:
         return x, y
 
     def compute_graph(self):
-        start_time = rospy.Time.now().to_sec()
+        start_time = time.clock()
         #self.get_image_desc(occ_grid)
         #try:
         if True:
             self.compute_hallway_points()
-            now = rospy.Time.now().to_sec()
+            now = time.clock()
             t = now - start_time
             self.performance_data.append(
                 {'time': rospy.Time.now().to_sec(), 'type': 0, 'robot_id': self.robot_id, 'computational_time': t})
 
         #except Exception as e:
         #    pu.log_msg(self.robot_id, 'Robot {}: Error in graph computation'.format(self.robot_id), self.debug_mode)
-
 
 
     def get_image_desc(self, occ_grid):
@@ -562,15 +559,15 @@ class Graph:
         start_time_clock = time.clock()
         vor = Voronoi(obstacles)
         end_time_clock = time.clock()
-        print("voronoi {}".format(end_time_clock - start_time_clock))
+        rospy.logerr("voronoi {}".format(end_time_clock - start_time_clock))
         fig = voronoi_plot_2d(vor)
-        from matplotlib import pyplot as plt  
+        from matplotlib import pyplot as plt
         plt.xlabel('xlabel', fontsize=18)
         plt.ylabel('ylabel', fontsize=16)
         fig.savefig("voronoi.png")
 
 
-
+        self.edges.clear()
         start_time_clock = time.clock()
         vertices = vor.vertices
         ridge_vertices = vor.ridge_vertices
@@ -587,25 +584,68 @@ class Graph:
             p1[INDEX_FOR_Y] = vertices[ridge_vertex[0]][INDEX_FOR_Y]
             p2[INDEX_FOR_X] = vertices[ridge_vertex[1]][INDEX_FOR_X]
             p2[INDEX_FOR_Y] = vertices[ridge_vertex[1]][INDEX_FOR_Y]
-            p1 = pu.get_point(tuple(p1))
-            p2 = pu.get_point(tuple(p2))
-            if self.latest_map.is_free(p1[INDEX_FOR_X], p1[INDEX_FOR_Y]) and self.latest_map.is_free(p2[INDEX_FOR_X], p2[INDEX_FOR_Y]):
+            p1 = tuple(p1)
+            p2 = tuple(p2)
+
+            q1 = tuple(obstacles[ridge_point[0]])
+            q2 = tuple(obstacles[ridge_point[1]])
+            if self.latest_map.is_free(p1[INDEX_FOR_X], p1[INDEX_FOR_Y]) and self.latest_map.is_free(p2[INDEX_FOR_X], p2[INDEX_FOR_Y]) and pu.D(q1,q2)>self.min_edge_length:
                 e = (p1, p2)
             else:
                 continue
-            #q1 = obstacles[ridge_point[0]]
-            #q2 = obstacles[ridge_point[1]]
-            #o = (pu.get_point(tuple(q1)), pu.get_point(tuple(q2)))
-            # if pu.D(q1, q2) > self.min_hallway_width:
-            #     self.edges[e] = o
-            self.edges[e] = 1
+            self.edges[e] = (q1,q2)
         end_time_clock = time.clock()
-        print("ridge {}".format(end_time_clock - start_time_clock))
+        rospy.logerr("ridge {}".format(end_time_clock - start_time_clock))
 
-        self.publish_edges()
         # self.get_adjacency_list(self.edges)
         # self.connect_subtrees()
         # self.merge_similar_edges()
+
+        self.publish_edges()
+
+    def has_unknown_points(self, p1,p2):
+        line_points= self.get_line(p1[INDEX_FOR_X],p1[INDEX_FOR_Y],p2[INDEX_FOR_X],p2[INDEX_FOR_Y])
+        for p in line_points:
+            if not self.is_free(p):
+                return True
+        return False
+
+    def get_line(self,x1, y1, x2, y2):
+        x1=int(round(x1))
+        y1=int(round(y1))
+        x2=int(round(x2))
+        y2=int(round(y2))
+        points = []
+        issteep = abs(y2-y1) > abs(x2-x1)
+        if issteep:
+            x1, y1 = y1, x1
+            x2, y2 = y2, x2
+        rev = False
+        if x1 > x2:
+            x1, x2 = x2, x1
+            y1, y2 = y2, y1
+            rev = True
+        deltax = x2 - x1
+        deltay = abs(y2-y1)
+        error = int(deltax / 2)
+        y = y1
+        ystep = None
+        if y1 < y2:
+            ystep = 1
+        else:
+            ystep = -1
+        for x in range(x1, x2 + 1):
+            if issteep:
+                points.append((y, x))
+            else:
+                points.append((x, y))
+            error -= deltay
+            if error < 0:
+                y += ystep
+                error += deltax
+        if rev:
+            points.reverse()
+        return points
 
     def merge_graphs(self):
         if self.old_edges and self.edges:

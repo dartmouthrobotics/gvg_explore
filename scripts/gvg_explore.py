@@ -99,21 +99,21 @@ class GVGExplore:
         self.environment = rospy.get_param("~environment")
         self.max_coverage_ratio = rospy.get_param("~max_coverage")
         self.method = rospy.get_param("~method")
-        rospy.Subscriber("/MoveTo/status".format(self.robot_id), GoalStatusArray, self.move_status_callback)
-        rospy.Subscriber("/MoveTo/result".format(self.robot_id), MoveToPosition2DActionResult,
+        rospy.Subscriber("/robot_{}/MoveTo/status".format(self.robot_id), GoalStatusArray, self.move_status_callback)
+        rospy.Subscriber("/robot_{}/MoveTo/result".format(self.robot_id), MoveToPosition2DActionResult,
                          self.move_result_callback)
-        rospy.Subscriber("/navigator/plan".format(self.robot_id), GridCells, self.navigation_plan_callback)
-        self.move_to_stop = rospy.ServiceProxy('/Stop'.format(self.robot_id), Trigger)
-        self.moveTo_pub = rospy.Publisher("/MoveTo/goal".format(self.robot_id), MoveToPosition2DActionGoal,
+        rospy.Subscriber("/robot_{}/navigator/plan".format(self.robot_id), GridCells, self.navigation_plan_callback)
+        self.move_to_stop = rospy.ServiceProxy('/robot_{}/Stop'.format(self.robot_id), Trigger)
+        self.moveTo_pub = rospy.Publisher("/robot_{}/MoveTo/goal".format(self.robot_id), MoveToPosition2DActionGoal,
                                           queue_size=10)
         self.vertex_publisher = rospy.Publisher("/robot_{}/explore/vertices".format(self.robot_id), Marker,
                                                 queue_size=10)
         self.leaf_publisher = rospy.Publisher("/robot_{}/explore/leaf_region".format(self.robot_id), Marker,
                                               queue_size=10)
-        self.edge_publisher = rospy.Publisher("/explore/edges".format(self.robot_id), Marker, queue_size=10)
+        self.edge_publisher = rospy.Publisher("/robot_{}/explore/edges".format(self.robot_id), Marker, queue_size=10)
         self.fetch_graph = rospy.ServiceProxy('/robot_{}/fetch_graph'.format(self.robot_id), FetchGraph)
-        self.pose_publisher = rospy.Publisher("/cmd_vel".format(self.robot_id), Twist, queue_size=1)
-        rospy.Subscriber("/odom/wheel".format(self.robot_id), Odometry, callback=self.pose_callback)
+        self.pose_publisher = rospy.Publisher("/robot_{}/cmd_vel".format(self.robot_id), Twist, queue_size=1)
+        rospy.Subscriber("/robot_{}/odom".format(self.robot_id), Odometry, callback=self.pose_callback)
         rospy.Subscriber('/robot_{}/gvgexplore/goal'.format(self.robot_id), Ridge, self.initial_action_handler)
         rospy.Service('/robot_{}/gvgexplore/cancel'.format(self.robot_id), CancelExploration,
                       self.received_prempt_handler)
@@ -182,52 +182,6 @@ class GVGExplore:
         self.goal_feedback_pub.publish(pose)  # publish to feedback
         self.start_gvg_exploration(edge)
 
-    # def start_gvg_exploration(self, edge):
-    #     parent_id = self.get_id()
-    #     leaf_id = self.get_id()
-    #     parent_ids = {leaf_id: parent_id, parent_id: parent_id}
-    #     id_pose = {parent_id: edge[0], leaf_id: edge[1]}
-    #     all_visited_poses = {edge[0]: parent_id, edge[1]: leaf_id}
-    #
-    #     # -------------------------------- DFS starts here ---------------
-    #     pivot_node = {parent_id: edge[0]}
-    #     parent = {leaf_id: parent_id}
-    #     visited = [parent_id]
-    #     pivot_id = pivot_node.keys()[0]
-    #     while not rospy.is_shutdown():
-    #         if self.cancel_request:
-    #             break
-    #         S = [pivot_id]
-    #         self.fetch_new_graph()
-    #         self.localize_nodes(id_pose, pivot_node)
-    #         while len(S) > 0:
-    #             u = S.pop()
-    #             pivot_node = {parent_ids[u]: id_pose[parent_ids[u]]}
-    #             self.move_to_frontier(id_pose[u], theta=pu.theta(id_pose[parent_ids[u]], id_pose[u]))
-    #             pu.log_msg(self.robot_id, "Size of stack: {}".format(len(S)), self.debug_mode)
-    #             start_time = rospy.Time.now().to_sec()
-    #             self.fetch_new_graph()
-    #             self.localize_nodes(id_pose, pivot_node)
-    #             leaf_pose = id_pose[u]
-    #             parent_pose = id_pose[parent_ids[u]]
-    #             leaves = self.get_leaves(leaf_pose, parent_pose)
-    #             best_leaf = self.get_best_leaf(leaves)
-    #             if best_leaf:
-    #                 leaf_parent = leaves[best_leaf]
-    #                 v_id = self.get_id()
-    #                 p_id = self.get_id()
-    #                 id_pose[v_id] = best_leaf
-    #                 id_pose[p_id] = leaf_parent
-    #                 parent_ids[v_id] = p_id
-    #                 S.append(v_id)
-    #                 parent[v_id] = u
-    #             visited.append(u)
-    #             all_visited_poses[leaf_pose] = u
-    #             end_time = rospy.Time.now().to_sec()
-    #             gvg_time = end_time - start_time
-    #             self.explore_computation.append({'time': start_time, 'gvg_compute': gvg_time})
-    #         pu.log_msg(self.robot_id, "Returned from DFS...", self.debug_mode)
-    #         sleep(1)
 
     def start_gvg_exploration(self, edge):
         parent_id = self.get_id()
@@ -817,11 +771,11 @@ class GVGExplore:
         robot_pose = None
         while not robot_pose:
             try:
-                self.listener.waitForTransform("/map".format(self.robot_id),
-                                               "/base_link".format(self.robot_id), rospy.Time(),
+                self.listener.waitForTransform("/robot_{}/map".format(self.robot_id),
+                                               "/robot_{}/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
-                (robot_loc_val, rot) = self.listener.lookupTransform("/map".format(self.robot_id),
-                                                                     "/base_link".format(self.robot_id),
+                (robot_loc_val, rot) = self.listener.lookupTransform("/robot_{}/map".format(self.robot_id),
+                                                                     "/robot_{}/base_link".format(self.robot_id),
                                                                      rospy.Time(0))
                 robot_pose = (math.floor(robot_loc_val[0]), math.floor(robot_loc_val[1]), robot_loc_val[2])
                 time.sleep(1)

@@ -126,7 +126,7 @@ class Robot:
         self.check_intersections = rospy.ServiceProxy('/robot_{}/check_intersections'.format(self.robot_id),
                                                       Intersections)
         rospy.Subscriber('/coverage'.format(self.robot_id), Coverage, self.coverage_callback)
-        rospy.Subscriber('/map'.format(self.robot_id), OccupancyGrid, self.map_update_callback)
+        rospy.Subscriber('/robot_{}/map'.format(self.robot_id), OccupancyGrid, self.map_update_callback)
         rospy.Subscriber('/robot_{}/gvgexplore/feedback'.format(self.robot_id), Pose, self.explore_feedback_callback)
         self.data_size_pub = rospy.Publisher('/shared_data_size', DataSize, queue_size=10)
         for rid in self.candidate_robots:
@@ -289,7 +289,7 @@ class Robot:
         ridge = self.compute_next_frontier(taken_poses, frontier_points)
         if ridge:
             self.frontier_ridge = ridge
-        # pu.log_msg(self.robot_id, "Going to new frontier now: {}".format(self.frontier_ridge), self.debug_mode)
+        pu.log_msg(self.robot_id, "Going to new frontier now: {}".format(self.frontier_ridge), self.debug_mode)
         if not self.frontier_ridge:
             self.frontier_ridge = list(frontier_points.values())[0]
         self.start_exploration_action(self.frontier_ridge)
@@ -325,7 +325,7 @@ class Robot:
     def map_update_callback(self, data):
         self.last_map_update_time = rospy.Time.now().to_sec()
         self.map_updating=False
-        self.goto_first_frontier()
+        # self.goto_first_frontier()
 
     def wait_for_updates(self):
         sleep_time = rospy.Time.now().to_sec() - self.last_map_update_time
@@ -419,11 +419,13 @@ class Robot:
         return auction
 
     def robots_karto_out_callback(self, data):
-        for rid in self.candidate_robots:
-            self.add_to_file(rid, [data])
-        if self.is_initial_data_sharing:
-            self.push_messages_to_receiver(self.candidate_robots, None, initiator=1)
-            self.is_initial_data_sharing = False
+        rospy.logerr("Received karto message: Robot ID {}".format(data.robot_id-1))
+        if self.robot_id == data.robot_id-1:
+            for rid in self.candidate_robots:
+                self.add_to_file(rid, [data])
+            if self.is_initial_data_sharing:
+                self.push_messages_to_receiver(self.candidate_robots, None, initiator=1)
+                self.is_initial_data_sharing = False
 
     def push_messages_to_receiver(self, receiver_ids, session_id, is_alert=0, initiator=0):
         for receiver_id in receiver_ids:
@@ -509,7 +511,7 @@ class Robot:
             return SharedPointResponse(auction_accepted=0)
         sender_id = data.msg_header.header.frame_id
         poses = data.poses
-        if not poses:
+        if not poses and self.frontier_ridge:
             # pu.log_msg(self.robot_id, "No poses received. Proceeding to my next frontier", self.debug_mode)
             self.start_exploration_action(self.frontier_ridge)
             return SharedPointResponse(auction_accepted=1, res_data=None)
@@ -614,7 +616,7 @@ class Robot:
         while not robot_pose:
             try:
                 self.listener.waitForTransform("/robot_{}/map".format(self.robot_id),
-                                               "robot_{}/base_link".format(self.robot_id), rospy.Time(),
+                                               "/robot_{}/base_link".format(self.robot_id), rospy.Time(),
                                                rospy.Duration(4.0))
                 (robot_loc_val, rot) = self.listener.lookupTransform("/robot_{}/map".format(self.robot_id),
                                                                      "/robot_{}/base_link".format(self.robot_id),

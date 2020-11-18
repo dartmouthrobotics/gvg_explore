@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<launch>
+<!--    <param name="use_sim_time" value="true" />-->
+    <arg name="world" default="maze"/>
+    <arg name="robot_count" default="2"/>
+    <arg name="run" default="0"/>
+    <arg name="method" default="gvg"/>
+    <arg name="bs_pose" default="0,0"/>
+
+
+    <group ns="robot_0">
+        <node pkg="nav2d_karto" name="Mapper" type="mapper">
+            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
+            <remap from="karto_out" to="/karto_out"/>
+
+            <param name="method" value="$(arg method)"/>
+            <param name="robot_count" value="$(arg robot_count)"/>
+            <param name="run" value="$(arg run)"/>
+            <param name="bs_pose" value="$(arg bs_pose)"/>
+
+        </node>
+    </group>
+
+    <group ns="robot_1">
+        <node pkg="nav2d_karto" name="Mapper" type="mapper">
+            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
+            <remap from="karto_out" to="/karto_out"/>
+
+            <param name="method" value="$(arg method)"/>
+            <param name="robot_count" value="$(arg robot_count)"/>
+            <param name="run" value="$(arg run)"/>
+            <param name="bs_pose" value="$(arg bs_pose)"/>
+
+        </node>
+    </group>
+
+</launch>

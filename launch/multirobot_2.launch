@@ -1,6 +1,15 @@
 <launch>
+
+    <arg name="world" default="maze"/>
+    <arg name="robot_count" default="2"/>
+    <arg name="run" default="0"/>
+    <arg name="method" default="gvg"/>
+    <arg name="bs_pose" default="0,0"/>
+    <arg name="environment"  default=''/>
+
     <param name="use_sim_time" value="true" />
-    <node name="Stage" pkg="stage_ros" type="stageros" args="$(find gvgexplore)/world/maze.world">
+
+    <node name="Stage" pkg="stage_ros" type="stageros" args="$(find gvgexplore)/world/$(arg world).world">
         <param name="base_watchdog_timeout" value="0" />
     </node>
     <node name="R0_MapAlign" pkg="tf" type="static_transform_publisher" args="0 0 0 0 0 0 /map /robot_0/map 100"/>
@@ -25,14 +34,28 @@
             <arg name="robot_name" value="0" />
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="1" />
+
+            <arg name="method" value="$(arg method)"/>
+            <arg name="robot_count" value="$(arg robot_count)"/>
+            <arg name="run" value="$(arg run)"/>
+            <arg name="bs_pose" value="$(arg bs_pose)"/>
+            <arg name="environment" value="$(arg environment)"/>
+
         </include>
 
+        <node name="scan_filter" pkg="gvgexplore" type="scan_filter.py">
+            <param name="method" value="$(arg method)"/>
+            <param name="robot_count" value="$(arg robot_count)"/>
+            <param name="run" value="$(arg run)"/>
+            <param name="bs_pose" value="$(arg bs_pose)"/>
+            <param name="environment" value="$(arg environment)"/>
+
+            <param name="robot_id" value="0" />
+            <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
+        </node>
 
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
-        <node pkg="nav2d_karto" name="Mapper" type="mapper">
-            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
-        </node>
 
     </group>
 
@@ -52,17 +75,41 @@
         </node>
         <node name="GetMap" pkg="nav2d_navigator" type="get_map_client" />
         <node name="SetGoal" pkg="nav2d_navigator" type="set_goal_client" />
-        <node pkg="nav2d_karto" name="Mapper" type="mapper">
-            <rosparam command="load" file="$(find gvgexplore)/param/mapper.yaml" subst_value="true"/>
-        </node>
 
         <include file="$(find gvgexplore)/launch/robot.launch">
             <arg name="robot_name" value="1" />
             <arg name="robot_type" value="2" />
             <arg name="base_stations" value="0" />
+
+            <arg name="method" value="$(arg method)"/>
+            <arg name="robot_count" value="$(arg robot_count)"/>
+            <arg name="run" value="$(arg run)"/>
+            <arg name="bs_pose" value="$(arg bs_pose)"/>
+            <arg name="environment" value="$(arg environment)"/>
+
         </include>
 
+        <node name="scan_filter" pkg="gvgexplore" type="scan_filter.py">
+            <param name="method" value="$(arg method)"/>
+            <param name="robot_count" value="$(arg robot_count)"/>
+            <param name="run" value="$(arg run)"/>
+            <param name="bs_pose" value="$(arg bs_pose)"/>
+            <param name="environment" value="$(arg environment)"/>
+
+            <param name="robot_id" value="1" />
+            <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
+        </node>
     </group>
+
+    <node name="roscbt" pkg="gvgexplore" type="roscbt.py" respawn="true">
+        <rosparam file="$(find gvgexplore)/param/roscbt_config2.yaml"/>
+        <rosparam file="$(find gvgexplore)/param/gvg_config.yaml"/>
+        <param name="method" value="$(arg method)"/>
+        <param name="robot_count" value="$(arg robot_count)"/>
+        <param name="run" value="$(arg run)"/>
+        <param name="bs_pose" value="$(arg bs_pose)"/>
+        <param name="environment" value="$(arg environment)"/>
+    </node>
 
     <!-- RVIZ to view the visualization -->
     <node name="RVIZ" pkg="rviz" type="rviz" args=" -d $(find gvgexploration)/param/maze.rviz" output="screen" />
